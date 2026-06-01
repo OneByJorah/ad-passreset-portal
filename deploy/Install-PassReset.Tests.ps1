@@ -231,3 +231,18 @@ Describe 'Service/Console upgrade path syncs config (behavioral) [#24]' {
         $after.PasswordChangeOptions.UseAutomaticContext     | Should -Be $true  # preserved
     }
 }
+
+Describe 'Diff mode produces human-readable output (STAB-011)' {
+    BeforeAll { $script:RealSchema = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/PassReset.Web/appsettings.schema.json' }
+    BeforeEach {
+        $script:cfg = Join-Path ([IO.Path]::GetTempPath()) "hr-$(New-Guid).json"
+        '{ "PasswordChangeOptions": { "UseAutomaticContext": true } }' | Set-Content $script:cfg -Encoding UTF8
+    }
+    AfterEach { Get-ChildItem ([IO.Path]::GetTempPath()) -Filter 'hr-*' -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue }
+
+    It 'output lists each addition with its default value and a no-write notice' {
+        $out = Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Diff' 6>&1 | Out-String
+        $out | Should -Match 'would add .*PortalLockoutThreshold = 3'
+        $out | Should -Match 'No file written'
+    }
+}
