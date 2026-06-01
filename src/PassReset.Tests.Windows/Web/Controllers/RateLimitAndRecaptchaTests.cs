@@ -297,4 +297,25 @@ public class RateLimitAndRecaptchaTests
         Assert.NotNull(result);
         Assert.Contains(result!.Errors, e => e.ErrorCode == ApiErrorCode.InvalidCaptcha);
     }
+
+    [Fact]
+    public async Task Recaptcha_LowScore_ReturnsInvalidCaptcha()
+    {
+        using var factory = new StubbedRecaptchaFactory(
+            _ => JsonOk("{\"success\":true,\"score\":0.3,\"action\":\"change_password\"}"),
+            failOpen: false);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var req = MakeRequest("alice");
+        req.Recaptcha = "valid-looking-token";
+
+        var response = await client.PostAsJsonAsync("/api/password", req);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.Contains(result!.Errors, e => e.ErrorCode == ApiErrorCode.InvalidCaptcha);
+    }
 }
