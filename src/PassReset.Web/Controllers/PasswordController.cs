@@ -231,7 +231,16 @@ public sealed class PasswordController : ControllerBase
             outcome, username, clientIp);
 
         if (siemEvent.HasValue)
-            _siemService.LogEvent(siemEvent.Value, username, clientIp, detail);
+        {
+            var traceId = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? "unknown";
+            _siemService.LogEvent(new AuditEvent(
+                EventType: siemEvent.Value,
+                Outcome:   outcome,
+                Username:  username,
+                ClientIp:  clientIp,
+                TraceId:   traceId,
+                Detail:    detail));
+        }
     }
 
     private static SiemEventType MapErrorCodeToSiemEvent(ApiErrorCode code) => code switch

@@ -37,9 +37,10 @@ public class GenericErrorMappingTests : IDisposable
     public sealed class RecordingSiemService : ISiemService
     {
         public List<SiemEventType> Events { get; } = new();
+        public List<AuditEvent> AuditEvents { get; } = new();
         public void LogEvent(SiemEventType eventType, string username, string ipAddress, string? detail = null)
             => Events.Add(eventType);
-        public void LogEvent(AuditEvent evt) => Events.Add(evt.EventType);
+        public void LogEvent(AuditEvent evt) { Events.Add(evt.EventType); AuditEvents.Add(evt); }
     }
     // Per-test factory disposal keeps rate-limiter partition state isolated and lets
     // individual tests flip the hosting environment without leaking across test methods.
@@ -395,5 +396,28 @@ public class GenericErrorMappingTests : IDisposable
         Assert.Single(result!.Errors);
         Assert.Equal(ApiErrorCode.PortalLockout, result.Errors[0].ErrorCode);
         Assert.Contains(SiemEventType.PortalLockout, factory.Recorder.Events);
+    }
+
+    /// <summary>
+    /// STAB-015: every password-change branch must emit a structured AuditEvent carrying a
+    /// non-empty TraceId so SOC tooling can correlate the failure across logs.
+    /// </summary>
+    [Fact]
+    public async Task Production_InvalidCredentials_EmitsStructuredAuditWithTraceId()
+    {
+        using var factory = new ProductionEnvFactoryWithRecorder();
+        using var client  = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        await client.PostAsJsonAsync("/api/password", MakeRequest("invalidCredentials"));
+
+        var failEvent = factory.Recorder.AuditEvents
+            .FirstOrDefault(e => e.EventType == SiemEventType.InvalidCredentials);
+        Assert.NotNull(failEvent);
+        Assert.False(string.IsNullOrWhiteSpace(failEvent!.TraceId));
+        Assert.DoesNotContain("BrandNewP@ssword123", failEvent.Detail ?? string.Empty);
+        Assert.DoesNotContain("OldPassword1!", failEvent.Detail ?? string.Empty);
     }
 }
