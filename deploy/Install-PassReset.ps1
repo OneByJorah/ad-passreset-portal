@@ -293,7 +293,8 @@ function Sync-AppSettingsAgainstSchema {
     param(
         [Parameter(Mandatory)] [string] $SchemaPath,
         [Parameter(Mandatory)] [string] $ConfigPath,
-        [Parameter(Mandatory)] [ValidateSet('Merge','Review','None','Diff')] [string] $Mode
+        [Parameter(Mandatory)] [ValidateSet('Merge','Review','None','Diff')] [string] $Mode,
+        [string] $LogPath = ''
     )
     if ($Mode -eq 'None') {
         Write-Ok 'Config sync skipped (-ConfigSync None)'
@@ -318,6 +319,15 @@ function Sync-AppSettingsAgainstSchema {
     $removedCount = 0
     $isDryRun     = ($Mode -eq 'Diff')
 
+    if (-not $LogPath) {
+        $stamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $base    = [IO.Path]::Combine([IO.Path]::GetDirectoryName($ConfigPath),
+                       [IO.Path]::GetFileNameWithoutExtension($ConfigPath))
+        $LogPath = "${base}_sync-${stamp}.log"
+    }
+    function script:Add-SyncLog { param([string]$Line) Add-Content -Path $LogPath -Value "$(Get-Date -Format o)  $Line" -Encoding UTF8 }
+    Add-SyncLog "Config sync started: mode=$Mode, config=$ConfigPath"
+
     foreach ($entry in $manifest) {
         $look = Get-LiveValueAtPath -Config $live -Path $entry.Path
         if ($entry.IsObsolete) {
@@ -330,6 +340,7 @@ function Sync-AppSettingsAgainstSchema {
                             $modified = $true
                             $removedCount++
                             Write-Ok "  - Removed obsolete: $($entry.Path)"
+                            Add-SyncLog "REMOVE  $($entry.Path)"
                         }
                     }
                 } else {
@@ -349,6 +360,7 @@ function Sync-AppSettingsAgainstSchema {
                 # Diff (dry-run): record what WOULD be added; never prompt, never mutate.
                 $additions += $entry
                 Write-Ok "  would add $($entry.Path) = $($entry.Default)"
+                Add-SyncLog "WOULD-ADD  $($entry.Path) = $($entry.Default)"
                 continue
             }
             if ($Mode -eq 'Review') {
@@ -361,6 +373,7 @@ function Sync-AppSettingsAgainstSchema {
                     $modified = $true
                     $additions += $entry
                     Write-Ok "  + $($entry.Path) = $($entry.Default)"
+                    Add-SyncLog "ADD  $($entry.Path) = $($entry.Default)"
                 }
             } catch {
                 Write-Warn "Could not add '$($entry.Path)': $($_.Exception.Message)"
@@ -370,14 +383,22 @@ function Sync-AppSettingsAgainstSchema {
 
     if ($isDryRun) {
         Write-Ok "Dry-run (-ConfigSync Diff): $($additions.Count) key(s) would be added, $($obsoleteFound.Count) obsolete key(s) present. No file written."
+        Write-Ok "Sync log: $LogPath"
         return
     }
 
     if ($modified) {
+        $backupPath = "${ConfigPath}_$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+        Copy-Item -Path $ConfigPath -Destination $backupPath -Force
+        Write-Ok "Backup before sync: $backupPath"
+        Add-SyncLog "BACKUP  $backupPath"
         $live | ConvertTo-Json -Depth 32 | Set-Content -Path $ConfigPath -Encoding UTF8 -NoNewline
         Write-Ok "Sync summary: $($additions.Count) added, $removedCount removed. Wrote $ConfigPath"
+        Write-Ok "Sync log: $LogPath"
+        Add-SyncLog "Sync summary: $($additions.Count) added, $removedCount removed."
     } else {
         Write-Ok 'Config is in sync with schema; no changes written.'
+        Add-SyncLog 'No changes.'
     }
 
     if ($obsoleteFound.Count -gt 0 -and $Mode -eq 'Merge') {

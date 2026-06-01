@@ -157,3 +157,29 @@ Describe 'Sync-AppSettingsAgainstSchema: Diff (dry-run) + removal counter' {
         $out | Should -Match 'would add .*PortalLockoutThreshold'
     }
 }
+
+Describe 'Sync-AppSettingsAgainstSchema: per-file backup + sync log' {
+    BeforeAll { $script:RealSchema = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/PassReset.Web/appsettings.schema.json' }
+    BeforeEach {
+        $script:dir = Join-Path ([IO.Path]::GetTempPath()) "bk-$(New-Guid)"
+        New-Item -ItemType Directory -Path $script:dir | Out-Null
+        $script:cfg = Join-Path $script:dir 'appsettings.Production.json'
+        '{ "PasswordChangeOptions": { "UseAutomaticContext": true } }' | Set-Content $script:cfg -Encoding UTF8
+    }
+    AfterEach { Remove-Item $script:dir -Recurse -Force -EA SilentlyContinue }
+
+    It 'creates a timestamped .bak before writing (Merge mode mutates)' {
+        Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Merge'
+        @(Get-ChildItem $script:dir -Filter 'appsettings.Production.json_*.bak').Count | Should -BeGreaterThan 0
+    }
+    It 'does NOT create a backup in Diff mode (no write)' {
+        Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Diff'
+        @(Get-ChildItem $script:dir -Filter '*.bak').Count | Should -Be 0
+    }
+    It 'writes a durable sync log listing additions' {
+        Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Merge'
+        $log = Get-ChildItem $script:dir -Filter 'appsettings.Production_sync-*.log' | Select-Object -First 1
+        $log | Should -Not -BeNullOrEmpty
+        (Get-Content $log.FullName -Raw) | Should -Match 'PortalLockoutThreshold'
+    }
+}
