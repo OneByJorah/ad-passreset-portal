@@ -67,6 +67,20 @@ jobs:
           }
           Write-Host 'Schema-drift gate passed: schema covers all config sections.'
 
+      - name: Installer Pester tests (config sync — STAB-010/011)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.0.0' })) {
+            Install-Module Pester -MinimumVersion 5.5.0 -Force -Scope CurrentUser -SkipPublisherCheck
+          }
+          $r = Invoke-Pester -Path deploy/Install-PassReset.Tests.ps1 -PassThru -Output Detailed
+          if ($r.FailedCount -gt 0) {
+            Write-Host "::error::Installer Pester suite failed ($($r.FailedCount) test(s))."
+            exit 1
+          }
+          Write-Host "Installer Pester suite passed ($($r.PassedCount) tests)."
+
       - name: Build solution
         run: dotnet build src/PassReset.sln --no-restore --configuration Release
 
