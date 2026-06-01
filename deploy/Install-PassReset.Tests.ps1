@@ -357,3 +357,18 @@ Describe 'PowerShell scripts: parse cleanly' {
         $bad -join '; ' | Should -BeNullOrEmpty
     }
 }
+Describe 'CI: PowerShell quality gate present' {
+    BeforeAll {
+        $repo = Split-Path $PSScriptRoot -Parent
+        $script:Ci  = Get-Content (Join-Path $repo '.github/workflows/ci.yml') -Raw
+        $script:Rel = Get-Content (Join-Path $repo '.github/workflows/release.yml') -Raw
+    }
+    It 'ci.yml defines a powershell-quality job' { $script:Ci | Should -Match 'powershell-quality:' }
+    It 'ci.yml runs PSScriptAnalyzer'           { $script:Ci | Should -Match 'PSScriptAnalyzer' }
+    It 'ci.yml runs the installer Pester suites' { $script:Ci | Should -Match 'Invoke-Pester' }
+    It 'ci.yml enforces no UTF-8 BOM on deploy scripts' { $script:Ci | Should -Match '(?i)BOM' }
+    It 'release.yml gates release on powershell-quality' {
+        $script:Rel | Should -Match 'needs:'
+        $script:Rel | Should -Match 'powershell-quality'
+    }
+}
