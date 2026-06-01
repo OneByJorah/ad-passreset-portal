@@ -96,6 +96,52 @@ public class RateLimitAndRecaptchaTests
     }
 
     /// <summary>
+    /// STAB-015: test-double SIEM recorder. The rate-limiter OnRejected path uses the legacy
+    /// <c>LogEvent(SiemEventType,...)</c> overload, so both overloads capture the event type.
+    /// </summary>
+    internal sealed class RecordingSiem : PassReset.Web.Services.ISiemService
+    {
+        public List<PassReset.Web.Services.SiemEventType> Events { get; } = new();
+        public void LogEvent(PassReset.Web.Services.SiemEventType eventType, string username, string ipAddress, string? detail = null) => Events.Add(eventType);
+        public void LogEvent(PassReset.Web.Services.AuditEvent evt) => Events.Add(evt.EventType);
+    }
+
+    /// <summary>
+    /// STAB-015: default rate-limit fixture with the SIEM service swapped for a recorder so
+    /// the 429 rejection's <c>RateLimitExceeded</c> emission is observable.
+    /// </summary>
+    public sealed class RecordingRateLimitFactory : WebApplicationFactory<Program>
+    {
+        internal RecordingSiem Recorder { get; } = new();
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                 = "true",
+                    ["WebSettings:EnableHttpsRedirect"]              = "false",
+                    ["ClientSettings:MinimumDistance"]               = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]             = "false",
+                    ["EmailNotificationSettings:Enabled"]            = "false",
+                    ["PasswordExpiryNotificationSettings:Enabled"]   = "false",
+                    ["SiemSettings:Syslog:Enabled"]                  = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]              = "false",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"] = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]    = "true",
+                });
+            });
+            builder.ConfigureTestServices(services =>
+            {
+                var existing = services.Where(d => d.ServiceType == typeof(PassReset.Web.Services.ISiemService)).ToList();
+                foreach (var d in existing) services.Remove(d);
+                services.AddSingleton<PassReset.Web.Services.ISiemService>(Recorder);
+            });
+        }
+    }
+
+    /// <summary>
     /// STAB-014(c) D-19: reCAPTCHA-enabled path. Hits real Google siteverify with
     /// an invalid token — see 09-CONTEXT.md §"D-19".
     /// </summary>
@@ -217,6 +263,25 @@ public class RateLimitAndRecaptchaTests
         // 6th POST exhausts the window — rate limiter emits 429 before controller executes.
         var rejected = await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+    }
+
+    /// <summary>
+    /// STAB-015 guard: the 429 emitted when the fixed window is exhausted must still
+    /// forward a <c>RateLimitExceeded</c> SIEM event. The rate-limiter OnRejected handler
+    /// uses the LEGACY <c>LogEvent</c> overload, so the recorder captures it there.
+    /// </summary>
+    [Fact]
+    public async Task RateLimit_429_EmitsRateLimitExceededEvent()
+    {
+        using var factory = new RecordingRateLimitFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        for (int i = 0; i < 5; i++)
+            await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
+        var rejected = await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+        Assert.Contains(PassReset.Web.Services.SiemEventType.RateLimitExceeded, factory.Recorder.Events);
     }
 
     [Fact]
