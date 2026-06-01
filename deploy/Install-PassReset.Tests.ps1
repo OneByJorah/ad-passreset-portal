@@ -209,3 +209,25 @@ Describe 'Config sync runs for all hosting modes (de-gated from IIS block) [#24]
         $syncCall | Should -BeGreaterThan $iisClose -Because 'sync must run after the IIS block closes (all modes)'
     }
 }
+
+Describe 'Service/Console upgrade path syncs config (behavioral) [#24]' {
+    BeforeAll { $script:RealSchema = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/PassReset.Web/appsettings.schema.json' }
+    BeforeEach {
+        $script:dir = Join-Path ([IO.Path]::GetTempPath()) "svc-$(New-Guid)"
+        New-Item -ItemType Directory -Path $script:dir | Out-Null
+        $script:cfg = Join-Path $script:dir 'appsettings.Production.json'
+        # Simulate an existing (upgrade) Service-mode config missing a key.
+        '{ "PasswordChangeOptions": { "UseAutomaticContext": true } }' | Set-Content $script:cfg -Encoding UTF8
+    }
+    AfterEach { Remove-Item $script:dir -Recurse -Force -EA SilentlyContinue }
+
+    It 'a Service-mode unattended upgrade resolves to Merge and adds defaults' {
+        # Service/Console have $siteExists=$false; presence of live config => upgrade.
+        $mode = Resolve-ConfigSyncMode -Requested '' -Force $false -IsUpgrade (Test-Path $script:cfg) -Interactive $false
+        $mode | Should -Be 'Merge'
+        Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode $mode
+        $after = Get-Content $script:cfg -Raw | ConvertFrom-Json
+        $after.PasswordChangeOptions.PortalLockoutThreshold | Should -Be 3
+        $after.PasswordChangeOptions.UseAutomaticContext     | Should -Be $true  # preserved
+    }
+}
