@@ -69,3 +69,39 @@ Describe 'PasswordChangeOptions.LocalPolicy schema parity' {
         } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
     }
 }
+
+Describe 'AdminSettings + Kestrel schema parity' {
+    It 'AdminSettings defines all 6 C# properties with correct defaults' {
+        $a = $script:SchemaObj.properties.AdminSettings.properties
+        $a.Enabled.default       | Should -Be $false
+        $a.LoopbackPort.default  | Should -Be 5010
+        $a.LoopbackPort.minimum  | Should -Be 1024
+        $a.LoopbackPort.maximum  | Should -Be 65535
+        foreach ($p in 'KeyStorePath','DataProtectionCertThumbprint','AppSettingsFilePath','SecretsFilePath') {
+            $a.PSObject.Properties.Name | Should -Contain $p
+        }
+    }
+    It 'Kestrel defines Endpoints.Https.Url and Certificate.Path/Password' {
+        $https = $script:SchemaObj.properties.Kestrel.properties.Endpoints.properties.Https.properties
+        $https.PSObject.Properties.Name | Should -Contain 'Url'
+        $https.Certificate.properties.PSObject.Properties.Name | Should -Contain 'Path'
+        $https.Certificate.properties.PSObject.Properties.Name | Should -Contain 'Password'
+    }
+    It 'validates a config carrying full AdminSettings + Kestrel sections' {
+        $tmp = Join-Path ([IO.Path]::GetTempPath()) "ak-$(New-Guid).json"
+        @'
+{ "WebSettings": { "EnableHttpsRedirect": true, "UseDebugProvider": false },
+  "PasswordChangeOptions": { "UseAutomaticContext": true, "PortalLockoutThreshold": 3, "LdapPort": 636 },
+  "SmtpSettings": { "Host": "", "Port": 587 },
+  "SiemSettings": { "Syslog": { "Enabled": false }, "AlertEmail": { "Enabled": false } },
+  "ClientSettings": {},
+  "AdminSettings": { "Enabled": false, "LoopbackPort": 5010, "KeyStorePath": null,
+    "DataProtectionCertThumbprint": null, "AppSettingsFilePath": null, "SecretsFilePath": null },
+  "Kestrel": { "Endpoints": { "Https": { "Url": "https://localhost:5001",
+    "Certificate": { "Path": null, "Password": null } } } } }
+'@ | Set-Content -Path $tmp -Encoding UTF8
+        try {
+            Test-Json -Path $tmp -SchemaFile $script:Schema -ErrorAction SilentlyContinue | Should -BeTrue
+        } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
+    }
+}
