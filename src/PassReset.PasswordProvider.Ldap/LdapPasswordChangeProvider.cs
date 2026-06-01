@@ -645,11 +645,13 @@ public sealed class LdapPasswordChangeProvider : IPasswordChangeProvider
     }
 
     /// <summary>
-    /// Reads the effective default-domain password policy from the rootDSE: <c>minPwdLength</c>,
-    /// <c>minPwdAge</c>, <c>maxPwdAge</c>. <c>RequiresComplexity</c> and <c>HistoryLength</c> are
-    /// not surfaced by rootDSE (they live on the domain root object's <c>pwdProperties</c> /
-    /// <c>pwdHistoryLength</c> attributes); reported as <c>false</c> / <c>0</c> here. Returns
-    /// <c>null</c> on bind/lookup failure — never throws.
+    /// Reads the effective default-domain password policy: <c>minPwdLength</c>, <c>minPwdAge</c>,
+    /// <c>maxPwdAge</c> from the rootDSE, plus <c>RequiresComplexity</c> and <c>HistoryLength</c>
+    /// from the domain-root <c>domainDNS</c> object's <c>pwdProperties</c> bitmask (bit 0x1) and
+    /// <c>pwdHistoryLength</c> via a Base-scope search on <c>defaultNamingContext</c> (STAB-021).
+    /// The domain-root read is best-effort — any failure degrades complexity/history to
+    /// <c>false</c> / <c>0</c>. Fine-grained password policies (PSOs) remain out of scope.
+    /// Returns <c>null</c> on bind/lookup failure — never throws.
     /// </summary>
     public Task<PasswordPolicy?> GetEffectivePasswordPolicyAsync()
     {
@@ -684,12 +686,46 @@ public sealed class LdapPasswordChangeProvider : IPasswordChangeProvider
             var minAgeDays = (int)TimeSpan.FromTicks(minAgeTicks).TotalDays;
             var maxAgeDays = (int)TimeSpan.FromTicks(maxAgeTicks).TotalDays;
 
-            // RequiresComplexity / HistoryLength are not exposed via rootDSE. The Windows
-            // provider reads them from the domain root entry's pwdProperties bitmask; doing
-            // that here would require a second Search bound to the domain NC. Acceptable
-            // initial fidelity gap — Phase 11 plan flags it; can be lifted later.
+            // STAB-021: complexity + history live on the domain-root domainDNS object
+            // (pwdProperties bitmask, pwdHistoryLength), not on rootDSE. Best-effort:
+            // any failure degrades to false/0 so this method never throws.
+            bool requiresComplexity = false;
+            int historyLength = 0;
+            var domainDn = GetFirstStringValueOrNull(rootDse, LdapAttributeNames.DefaultNamingContext);
+            if (!string.IsNullOrWhiteSpace(domainDn))
+            {
+                try
+                {
+                    var rootReq = new SearchRequest(
+                        distinguishedName: domainDn,
+                        ldapFilter: "(objectClass=domainDNS)",
+                        searchScope: SearchScope.Base,
+                        attributeList: new[]
+                        {
+                            LdapAttributeNames.PwdProperties,
+                            LdapAttributeNames.PwdHistoryLength,
+                        });
+                    var rootResp = session.Search(rootReq);
+                    if (rootResp.Entries.Count > 0)
+                    {
+                        var domainEntry = rootResp.Entries[0];
+                        if (long.TryParse(GetFirstStringValueOrNull(domainEntry, LdapAttributeNames.PwdProperties), out var pwdProps))
+                            requiresComplexity = (pwdProps & 0x1) != 0; // DOMAIN_PASSWORD_COMPLEX
+                        if (int.TryParse(GetFirstStringValueOrNull(domainEntry, LdapAttributeNames.PwdHistoryLength), out var hist))
+                            historyLength = hist;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Degrade on ANY failure (directory error, unexpected protocol state):
+                    // the policy panel must still render with minLen/age, and this method
+                    // must never throw. Complexity/history simply fall back to false/0.
+                    _logger.LogWarning(ex, "Domain-root pwdProperties/pwdHistoryLength read failed; reporting complexity=false history=0");
+                }
+            }
+
             return Task.FromResult<PasswordPolicy?>(
-                new PasswordPolicy(minLen, RequiresComplexity: false, HistoryLength: 0, minAgeDays, maxAgeDays));
+                new PasswordPolicy(minLen, requiresComplexity, historyLength, minAgeDays, maxAgeDays));
         }
         catch (Exception ex) when (ex is LdapException or DirectoryOperationException)
         {

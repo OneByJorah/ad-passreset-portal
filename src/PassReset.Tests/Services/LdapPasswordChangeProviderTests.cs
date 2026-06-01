@@ -585,4 +585,23 @@ public class LdapPasswordChangeProviderTests
         Assert.True(policy!.RequiresComplexity);
         Assert.Equal(24, policy.HistoryLength);
     }
+
+    [Fact]
+    public async Task GetEffectivePasswordPolicyAsync_NoComplexityBit_ReportsFalse()
+    {
+        var (sut, fake) = Build();
+        fake.RootDse = MakeEntry("",
+            (LdapAttributeNames.MinPwdLength, "8"),
+            ("defaultNamingContext", "DC=corp,DC=example,DC=com"));
+        fake.OnSearch("objectClass=domainDNS",
+            MakeResponse(MakeEntry("DC=corp,DC=example,DC=com",
+                ("pwdProperties", "0"),
+                ("pwdHistoryLength", "0"))));
+
+        var policy = await sut.GetEffectivePasswordPolicyAsync();
+
+        Assert.NotNull(policy);
+        Assert.False(policy!.RequiresComplexity);
+        Assert.Equal(0, policy.HistoryLength);
+    }
 }
