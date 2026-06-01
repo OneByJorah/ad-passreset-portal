@@ -430,3 +430,19 @@ Describe 'Install-PassReset: Resolve-DependencyAction' {
         Resolve-DependencyAction -InstallDependencies 'prompt' -Force $false | Should -Be 'prompt'
     }
 }
+
+Describe 'Install-PassReset: dependency control parameters' {
+    BeforeAll {
+        $t=$null;$e=$null
+        $ast=[System.Management.Automation.Language.Parser]::ParseFile(
+            "$PSScriptRoot/Install-PassReset.ps1",[ref]$t,[ref]$e)
+        $script:Names=$ast.ParamBlock.Parameters.Name.VariablePath.UserPath
+    }
+    It 'declares -InstallDependencies' { $script:Names | Should -Contain 'InstallDependencies' }
+    It 'declares -SkipDependencyCheck' { $script:Names | Should -Contain 'SkipDependencyCheck' }
+    It 'help text documents both flags' {
+        $raw = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw
+        $raw | Should -Match '\.PARAMETER InstallDependencies'
+        $raw | Should -Match '\.PARAMETER SkipDependencyCheck'
+    }
+}

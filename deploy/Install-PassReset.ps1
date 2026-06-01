@@ -72,6 +72,15 @@
     Skip the interactive upgrade confirmation prompt when an existing installation is detected.
     Use this for unattended / CI deployments.
 
+.PARAMETER InstallDependencies
+    Controls prerequisite auto-install: 'prompt' (default, interactive Y/N),
+    'yes' (auto-install missing IIS features and .NET Hosting Bundle), or 'no'
+    (abort cleanly when a prerequisite is missing). -Force implies 'yes'.
+
+.PARAMETER SkipDependencyCheck
+    Skip all prerequisite detection (IIS features + .NET Hosting Bundle). Use only
+    on hosts you have already validated. The installer proceeds straight to site setup.
+
 .PARAMETER ConfigSync
     Controls how appsettings.Production.json is reconciled with the schema on upgrade.
     Modes:
@@ -138,6 +147,11 @@ param(
     # STAB-019: bypass post-deploy /api/health + /api/password verification (air-gapped hosts only).
     # Default $false — verification runs by default, including under -Force (D-06/D-07).
     [switch] $SkipHealthCheck = $false,
+
+    [ValidateSet('prompt','yes','no')]
+    [string] $InstallDependencies = 'prompt',
+
+    [switch] $SkipDependencyCheck,
 
     [ValidateSet('IIS','Service','Console')]
     [string] $HostingMode,
