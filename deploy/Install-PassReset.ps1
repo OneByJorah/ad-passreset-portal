@@ -293,7 +293,7 @@ function Sync-AppSettingsAgainstSchema {
     param(
         [Parameter(Mandatory)] [string] $SchemaPath,
         [Parameter(Mandatory)] [string] $ConfigPath,
-        [Parameter(Mandatory)] [ValidateSet('Merge','Review','None')] [string] $Mode
+        [Parameter(Mandatory)] [ValidateSet('Merge','Review','None','Diff')] [string] $Mode
     )
     if ($Mode -eq 'None') {
         Write-Ok 'Config sync skipped (-ConfigSync None)'
@@ -315,6 +315,8 @@ function Sync-AppSettingsAgainstSchema {
     $additions = @()
     $obsoleteFound = @()
     $modified = $false
+    $removedCount = 0
+    $isDryRun     = ($Mode -eq 'Diff')
 
     foreach ($entry in $manifest) {
         $look = Get-LiveValueAtPath -Config $live -Path $entry.Path
@@ -326,6 +328,7 @@ function Sync-AppSettingsAgainstSchema {
                     if ($reply -match '^[Yy]') {
                         if (Remove-LiveValueAtPath -Config $live -Path $entry.Path) {
                             $modified = $true
+                            $removedCount++
                             Write-Ok "  - Removed obsolete: $($entry.Path)"
                         }
                     }
@@ -340,6 +343,12 @@ function Sync-AppSettingsAgainstSchema {
             if (-not $entry.HasDefault) {
                 # No default in schema -> can't auto-add; warn so operator knows.
                 Write-Warn "Missing key '$($entry.Path)' has no default in schema; not added (operator must set manually)."
+                continue
+            }
+            if ($isDryRun) {
+                # Diff (dry-run): record what WOULD be added; never prompt, never mutate.
+                $additions += $entry
+                Write-Ok "  would add $($entry.Path) = $($entry.Default)"
                 continue
             }
             if ($Mode -eq 'Review') {
@@ -359,9 +368,14 @@ function Sync-AppSettingsAgainstSchema {
         }
     }
 
+    if ($isDryRun) {
+        Write-Ok "Dry-run (-ConfigSync Diff): $($additions.Count) key(s) would be added, $($obsoleteFound.Count) obsolete key(s) present. No file written."
+        return
+    }
+
     if ($modified) {
         $live | ConvertTo-Json -Depth 32 | Set-Content -Path $ConfigPath -Encoding UTF8 -NoNewline
-        Write-Ok "Wrote $($additions.Count) addition(s) to $ConfigPath"
+        Write-Ok "Sync summary: $($additions.Count) added, $removedCount removed. Wrote $ConfigPath"
     } else {
         Write-Ok 'Config is in sync with schema; no changes written.'
     }

@@ -138,3 +138,22 @@ Describe 'Remove-LiveValueAtPath: StrictMode-safe on empty/absent nodes (#24/#26
         $null -ne $live.Section.PSObject.Properties['Old'] | Should -Be $false
     }
 }
+
+Describe 'Sync-AppSettingsAgainstSchema: Diff (dry-run) + removal counter' {
+    BeforeAll { $script:RealSchema = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/PassReset.Web/appsettings.schema.json' }
+    BeforeEach { $script:cfg = Join-Path ([IO.Path]::GetTempPath()) "diff-$(New-Guid).json" }
+    AfterEach  { Get-ChildItem ([IO.Path]::GetTempPath()) -Filter 'diff-*' -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue }
+
+    It 'Diff mode does NOT write the file' {
+        '{ "PasswordChangeOptions": { "UseAutomaticContext": true } }' | Set-Content $script:cfg -Encoding UTF8
+        $before = Get-Content $script:cfg -Raw
+        Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Diff'
+        (Get-Content $script:cfg -Raw) | Should -BeExactly $before
+    }
+
+    It 'Diff mode emits a would-add line for each missing key' {
+        '{ "PasswordChangeOptions": { "UseAutomaticContext": true } }' | Set-Content $script:cfg -Encoding UTF8
+        $out = Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Diff' 6>&1 | Out-String
+        $out | Should -Match 'would add .*PortalLockoutThreshold'
+    }
+}
