@@ -104,3 +104,24 @@ Describe 'Sync-AppSettingsAgainstSchema: core invariants (regression guard)' {
         $after.PasswordChangeOptions.PortalLockoutThreshold | Should -Be 99
     }
 }
+
+Describe 'Sync-AppSettingsAgainstSchema: adds keys when an entire parent section is missing (#24)' {
+    BeforeAll { $script:RealSchema = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/PassReset.Web/appsettings.schema.json' }
+    BeforeEach { $script:cfg = Join-Path ([IO.Path]::GetTempPath()) "mp-$(New-Guid).json" }
+    AfterEach  { Get-ChildItem ([IO.Path]::GetTempPath()) -Filter 'mp-*' -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue }
+
+    It 'adds an entire missing section (e.g. AdminSettings) from schema defaults' {
+        # Live config lacks AdminSettings entirely (simulates upgrade from older release).
+        '{ "PasswordChangeOptions": { "UseAutomaticContext": true } }' | Set-Content $script:cfg -Encoding UTF8
+        Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Merge'
+        $after = Get-Content $script:cfg -Raw | ConvertFrom-Json
+        $after.AdminSettings.LoopbackPort | Should -Be 5010
+        $after.AdminSettings.Enabled      | Should -Be $false
+    }
+    It 'still adds keys whose parent already exists (no regression)' {
+        '{ "PasswordChangeOptions": { "UseAutomaticContext": true } }' | Set-Content $script:cfg -Encoding UTF8
+        Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Merge'
+        $after = Get-Content $script:cfg -Raw | ConvertFrom-Json
+        $after.PasswordChangeOptions.PortalLockoutThreshold | Should -Be 3
+    }
+}

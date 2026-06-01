@@ -258,8 +258,10 @@ function Set-LiveValueAtPath {
         $node = $prop.Value
     }
     $leaf = $segments[-1]
-    if ($node.PSObject.Properties.Name -contains $leaf) {
-        # Per D-09/D-13: never modify existing values
+    if ($null -ne $node.PSObject.Properties[$leaf]) {
+        # Per D-09/D-13: never modify existing values.
+        # Indexer form is StrictMode-safe on a freshly-created empty parent
+        # object, where '.PSObject.Properties.Name' would throw.
         return $false
     }
     $node | Add-Member -NotePropertyName $leaf -NotePropertyValue $Value
