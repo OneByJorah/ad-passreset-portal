@@ -1715,7 +1715,21 @@ if ($CertThumbprint -and $HttpPort -le 0) {
 }
 
 # STAB-001 D-03: announce the reachable URLs so operators don't have to inspect IIS.
+# STAB-019 / host-header: derive the announce + health host from the actual IIS
+# binding so custom host headers (e.g. passreset.corp.local) are honored. Prefer
+# the HTTPS binding host when a cert is bound (health check targets HTTPS), else the
+# HTTP binding host, else the machine name. Strict-mode guard: assign the
+# Select-Object result to a local and null-check before touching .BindingInformation.
 $hostHeader = $env:COMPUTERNAME
+$httpsB = @(Get-IISSiteBinding -Name $SiteName -Protocol https -ErrorAction SilentlyContinue) | Select-Object -First 1
+$httpB  = @(Get-IISSiteBinding -Name $SiteName -Protocol http  -ErrorAction SilentlyContinue) | Select-Object -First 1
+$httpsBindingInfo = if ($httpsB) { $httpsB.BindingInformation } else { $null }
+$httpBindingInfo  = if ($httpB)  { $httpB.BindingInformation }  else { $null }
+if ($CertThumbprint -and $httpsBindingInfo) {
+    $hostHeader = Resolve-HealthHostHeader -BindingInformation $httpsBindingInfo -Fallback $env:COMPUTERNAME
+} elseif ($httpBindingInfo) {
+    $hostHeader = Resolve-HealthHostHeader -BindingInformation $httpBindingInfo -Fallback $env:COMPUTERNAME
+}
 if (-not $siteExists) {
     Write-Ok "PassReset reachable at http://${hostHeader}:${selectedHttpPort}/"
 } else {

@@ -593,3 +593,13 @@ Describe 'Install-PassReset: Get-HealthFailureDiagnostics' {
     It 'references the base URL'      { $script:Diag | Should -Match 'https://host01:443' }
     It 'mentions binding/port checks' { $script:Diag | Should -Match '(?i)binding' }
 }
+
+Describe 'Install-PassReset: health host-header wiring' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    It 'derives $hostHeader from a binding via Resolve-HealthHostHeader' {
+        $script:Src | Should -Match 'Resolve-HealthHostHeader'
+    }
+    It 'passes COMPUTERNAME as the fallback to the resolver' {
+        $script:Src | Should -Match 'Resolve-HealthHostHeader[^\r\n]*-Fallback[^\r\n]*COMPUTERNAME'
+    }
+}
