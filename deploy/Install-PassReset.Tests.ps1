@@ -198,3 +198,14 @@ Describe 'Resolve-ConfigSyncMode: hosting-mode aware resolution' {
         Resolve-ConfigSyncMode -Requested '' -Force $false -IsUpgrade $true -Interactive $false | Should -Be 'Merge'
     }
 }
+
+Describe 'Config sync runs for all hosting modes (de-gated from IIS block) [#24]' {
+    It 'invokes Sync/Drift after the IIS hosting block closes' {
+        $src   = Get-Content (Join-Path $PSScriptRoot 'Install-PassReset.ps1') -Raw
+        $lines = $src -split "`r?`n"
+        $iisClose = ($lines | Select-String -SimpleMatch '# ─── end IIS hosting block ───').LineNumber | Select-Object -First 1
+        $syncCall = ($lines | Select-String -SimpleMatch 'Sync-AppSettingsAgainstSchema').LineNumber | Select-Object -Last 1
+        $iisClose | Should -Not -BeNullOrEmpty -Because 'an end-marker comment must exist on the IIS block close'
+        $syncCall | Should -BeGreaterThan $iisClose -Because 'sync must run after the IIS block closes (all modes)'
+    }
+}

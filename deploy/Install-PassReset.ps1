@@ -1794,33 +1794,61 @@ catch {
     }
 }
 
-# ─── 9b. Config sync (schema-driven additive merge — plan 08-05 / STAB-010) ───
-# Walks appsettings.schema.json, adds any missing keys to the operator's live
-# appsettings.Production.json using schema defaults. NEVER modifies existing
-# values (D-13). Arrays atomic (D-14). Obsolete keys reported (Merge) or
-# prompted (Review). $ConfigSync was resolved earlier in the script (Merge /
-# Review / None) based on -ConfigSync param, -Force, or interactive prompt.
+} # end if ($HostingMode -eq 'IIS')
+elseif ($HostingMode -eq 'Service') {
+    if (-not (Test-ServiceModePreflight -CertThumbprint $CertThumbprint -PfxPath $PfxPath -PfxPassword $PfxPassword -ServiceAccount $ServiceAccount -MigrateFromIisSite 'PassReset')) {
+        throw "Service-mode preflight failed. See warnings above. No changes made."
+    }
+    $existingSite = Get-Website -Name 'PassReset' -ErrorAction SilentlyContinue
+    if ($existingSite) {
+        Write-Host "Migrating from IIS: tearing down existing site..." -ForegroundColor Yellow
+        Stop-Website -Name 'PassReset' -ErrorAction SilentlyContinue
+        Remove-Website -Name 'PassReset' -ErrorAction SilentlyContinue
+        if (Get-IISAppPool -Name $AppPoolName -ErrorAction SilentlyContinue) {
+            Remove-WebAppPool -Name $AppPoolName
+        }
+    }
+    Install-AsWindowsService `
+        -BinaryPath (Join-Path $PhysicalPath 'PassReset.Web.exe') `
+        -ServiceAccount $ServiceAccount `
+        -ServicePassword $ServicePassword
+}
+elseif ($HostingMode -eq 'Console') {
+    Write-Host "Console mode: files copied to $PhysicalPath." -ForegroundColor Cyan
+    Write-Host "To start manually: dotnet '$PhysicalPath\PassReset.Web.dll'" -ForegroundColor Cyan
+}
+# ─── end IIS hosting block ───
 
-if ($siteExists -and (Test-Path $prodConfig)) {
+# ─── 9b/9c. Config sync + drift check (ALL hosting modes — STAB-010/STAB-012) ──
+# Runs for IIS, Service, AND Console. Moved out of the IIS-only branch (#24) so
+# Service/Console upgrades actually sync; previously the resolved $ConfigSync was
+# never applied for those modes. $ConfigSync was resolved earlier
+# (Resolve-ConfigSyncMode). Paths are re-derived from $PhysicalPath rather than
+# relying on IIS-branch locals.
+#
+# 9b — Config sync (schema-driven additive merge — plan 08-05 / STAB-010):
+#   Walks appsettings.schema.json, adds any missing keys to the operator's live
+#   appsettings.Production.json using schema defaults. NEVER modifies existing
+#   values (D-13). Arrays atomic (D-14). Obsolete keys reported (Merge) or
+#   prompted (Review). On fresh installs $ConfigSync is None (no-op) and the
+#   config is the freshly-copied template, so the additive merge changes nothing.
+# 9c — Schema drift check (plan 08-06 / STAB-012):
+#   Purely diagnostic — any mutation is sync's job (9b above). Positioned AFTER
+#   sync so the report reflects the post-sync state: 'Missing' only surfaces when
+#   sync was None or the schema had no default for a required key.
+$prodConfig = Join-Path $PhysicalPath 'appsettings.Production.json'
+$schemaFile = Join-Path $PhysicalPath 'appsettings.schema.json'
+
+if (Test-Path $prodConfig) {
     Write-Step 'Syncing appsettings.Production.json against schema'
-    $schemaFile = Join-Path $PhysicalPath 'appsettings.schema.json'
     Sync-AppSettingsAgainstSchema `
         -SchemaPath $schemaFile `
         -ConfigPath $prodConfig `
         -Mode $ConfigSync
-}
 
-# ─── 9c. Schema drift check (plan 08-06 / STAB-012) ───────────────────────────
-# Runs UNCONDITIONALLY on every upgrade (D-18) - no silent-skip when live
-# parses OK. Schema is the source of truth (D-17). Purely diagnostic - any
-# mutation is sync's job (9b above). Positioned AFTER sync so the report
-# reflects the post-sync state: 'Missing' only surfaces when sync was None or
-# the schema had no default for a required key.
-
-if ($siteExists) {
     Write-Step 'Checking appsettings.Production.json for schema drift'
     $drift = Test-AppSettingsSchemaDrift `
-        -SchemaPath (Join-Path $PhysicalPath 'appsettings.schema.json') `
+        -SchemaPath $schemaFile `
         -ConfigPath $prodConfig
 
     if ($drift.Skipped) {
@@ -1856,29 +1884,6 @@ if ($siteExists) {
             Write-Ok 'No schema drift detected.'
         }
     }
-}
-} # end if ($HostingMode -eq 'IIS')
-elseif ($HostingMode -eq 'Service') {
-    if (-not (Test-ServiceModePreflight -CertThumbprint $CertThumbprint -PfxPath $PfxPath -PfxPassword $PfxPassword -ServiceAccount $ServiceAccount -MigrateFromIisSite 'PassReset')) {
-        throw "Service-mode preflight failed. See warnings above. No changes made."
-    }
-    $existingSite = Get-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-    if ($existingSite) {
-        Write-Host "Migrating from IIS: tearing down existing site..." -ForegroundColor Yellow
-        Stop-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-        Remove-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-        if (Get-IISAppPool -Name $AppPoolName -ErrorAction SilentlyContinue) {
-            Remove-WebAppPool -Name $AppPoolName
-        }
-    }
-    Install-AsWindowsService `
-        -BinaryPath (Join-Path $PhysicalPath 'PassReset.Web.exe') `
-        -ServiceAccount $ServiceAccount `
-        -ServicePassword $ServicePassword
-}
-elseif ($HostingMode -eq 'Console') {
-    Write-Host "Console mode: files copied to $PhysicalPath." -ForegroundColor Cyan
-    Write-Host "To start manually: dotnet '$PhysicalPath\PassReset.Web.dll'" -ForegroundColor Cyan
 }
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
