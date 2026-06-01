@@ -283,7 +283,7 @@ function Remove-LiveValueAtPath {
         $node = $prop.Value
     }
     $leaf = $segments[-1]
-    if ($node.PSObject.Properties.Name -notcontains $leaf) { return $false }
+    if ($null -eq $node.PSObject.Properties[$leaf]) { return $false }
     $node.PSObject.Properties.Remove($leaf)
     return $true
 }

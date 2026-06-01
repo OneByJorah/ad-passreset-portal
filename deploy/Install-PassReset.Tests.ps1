@@ -125,3 +125,16 @@ Describe 'Sync-AppSettingsAgainstSchema: adds keys when an entire parent section
         $after.PasswordChangeOptions.PortalLockoutThreshold | Should -Be 3
     }
 }
+
+Describe 'Remove-LiveValueAtPath: StrictMode-safe on empty/absent nodes (#24/#26)' {
+    It 'returns false (no throw) when the leaf is absent under an empty parent object' {
+        $live = [PSCustomObject]@{ Section = [PSCustomObject]@{} }  # empty parent
+        { Remove-LiveValueAtPath -Config $live -Path 'Section:Missing' } | Should -Not -Throw
+        Remove-LiveValueAtPath -Config $live -Path 'Section:Missing' | Should -Be $false
+    }
+    It 'removes an existing leaf and returns true' {
+        $live = [PSCustomObject]@{ Section = [PSCustomObject]@{ Old = 'x' } }
+        Remove-LiveValueAtPath -Config $live -Path 'Section:Old' | Should -Be $true
+        $null -ne $live.Section.PSObject.Properties['Old'] | Should -Be $false
+    }
+}
