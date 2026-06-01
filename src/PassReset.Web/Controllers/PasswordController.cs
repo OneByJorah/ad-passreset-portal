@@ -252,7 +252,17 @@ public sealed class PasswordController : ControllerBase
         _                                => SiemEventType.Generic,
     };
 
-    /// <summary>STAB-013 D-01: account-enumeration codes that must collapse to Generic on the wire in Production.</summary>
+    /// <summary>
+    /// STAB-013 D-01: account-enumeration codes that MUST collapse to Generic on the wire
+    /// in Production. <see cref="ApiErrorCode.InvalidCredentials"/> and
+    /// <see cref="ApiErrorCode.UserNotFound"/> leak whether a username exists in AD, so they
+    /// are redacted. Deliberately EXCLUDED: <see cref="ApiErrorCode.ApproachingLockout"/> and
+    /// <see cref="ApiErrorCode.PortalLockout"/> — these leak only per-account portal-throttling
+    /// state (this portal is rate-limiting this account), never directory membership, so they
+    /// are safe to expose and are NOT an enumeration vector. SIEM granularity is preserved
+    /// independently (D-05); see GenericErrorMappingTests.Production_ApproachingLockout_*
+    /// / Production_PortalLockout_* for the regression guard.
+    /// </summary>
     private static bool IsAccountEnumerationCode(ApiErrorCode code) =>
         code is ApiErrorCode.InvalidCredentials or ApiErrorCode.UserNotFound;
 
