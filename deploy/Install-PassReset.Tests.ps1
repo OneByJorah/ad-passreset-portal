@@ -472,3 +472,13 @@ Describe 'Install-PassReset: Get-HostingBundleDiagnostic' {
         Get-HostingBundleDiagnostic -InstalledVersion '10.0.3' | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Install-PassReset: IIS prereq block wiring' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    It 'uses Resolve-DependencyAction for the missing-feature decision' { $script:Src | Should -Match 'Resolve-DependencyAction' }
+    It 'collects DISM exit codes for reboot detection' { $script:Src | Should -Match 'Test-DismRebootPending' }
+    It 're-validates IIS features after DISM' {
+        ([regex]::Matches($script:Src, 'Get-WindowsFeature')).Count | Should -BeGreaterThan 1
+    }
+    It 'honors -SkipDependencyCheck' { $script:Src | Should -Match '\$SkipDependencyCheck' }
+}

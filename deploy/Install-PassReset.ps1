@@ -980,7 +980,7 @@ Write-Step 'Checking prerequisites'
 # IIS prerequisites only apply when hosting under IIS. Service/Console modes
 # run standalone and must not hard-fail (or invoke Get-WindowsFeature, which
 # throws on workstation-class hosts without the Server-Manager RSAT).
-if ($HostingMode -eq 'IIS') {
+if ($HostingMode -eq 'IIS' -and -not $SkipDependencyCheck) {
     # IIS
     if (-not (Get-Service -Name W3SVC -ErrorAction SilentlyContinue)) {
         Abort 'IIS (W3SVC) is not installed. Install the Web Server (IIS) role first.'
@@ -1009,32 +1009,55 @@ if ($HostingMode -eq 'IIS') {
     if ($missing) {
         Write-Warn 'Missing IIS features detected:'
         $missing | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
-        if (-not $Force) {
+
+        $action = Resolve-DependencyAction -InstallDependencies $InstallDependencies -Force $Force.IsPresent
+        if ($action -eq 'prompt') {
             $consent = Read-Host '  Install missing IIS features now via DISM? [Y/N]'
-            if ($consent -notmatch '^[Yy]') {
-                Write-Host ''
-                Write-Host '  To install manually, run as Administrator:' -ForegroundColor Yellow
-                foreach ($f in $missing) {
-                    Write-Host "    dism /online /enable-feature /featurename:$f /all /norestart" -ForegroundColor Yellow
-                }
-                Write-Host ''
-                exit 0
-            }
-        } else {
-            Write-Ok '-Force specified - installing missing IIS features via DISM'
+            $action  = if ($consent -match '^[Yy]') { 'install' } else { 'abort' }
         }
+        if ($action -eq 'abort') {
+            Write-Host ''
+            Write-Host '  Missing IIS roles/features (not installed):' -ForegroundColor Yellow
+            Write-Host '  To install manually, run as Administrator:' -ForegroundColor Yellow
+            foreach ($f in $missing) {
+                Write-Host "    dism /online /enable-feature /featurename:$f /all /norestart" -ForegroundColor Yellow
+            }
+            Write-Host ''
+            exit 0
+        }
+        Write-Ok 'Installing missing IIS features via DISM'
+
+        $dismExits = @()
         foreach ($f in $missing) {
             if ($PSCmdlet.ShouldProcess("IIS feature $f", 'Enable via DISM')) {
-                $dismExit = (Start-Process -FilePath dism.exe `
+                $code = (Start-Process -FilePath dism.exe `
                     -ArgumentList @('/online','/enable-feature',"/featurename:$f",'/all','/norestart','/quiet') `
                     -Wait -PassThru -NoNewWindow).ExitCode
+                $dismExits += $code
                 # 3010 = success, reboot pending (Microsoft DISM convention)
-                if ($dismExit -ne 0 -and $dismExit -ne 3010) {
-                    Abort "DISM failed enabling $f (exit $dismExit). Run: dism /online /get-featureinfo /featurename:$f"
+                if ($code -ne 0 -and $code -ne 3010) {
+                    Abort "DISM failed enabling $f (exit $code). Run: dism /online /get-featureinfo /featurename:$f"
                 }
             }
         }
         Write-Ok 'IIS features enabled via DISM'
+
+        # STAB-006: a reboot is required to complete feature install - do NOT proceed
+        # to site/pool creation; the worker process would start without the roles present.
+        if (Test-DismRebootPending -ExitCodes $dismExits) {
+            Abort 'IIS feature installation requires a system reboot (DISM exit 3010). Reboot and re-run the installer.'
+        }
+
+        # STAB-006: re-validate after install; abort with an explicit list if anything is still missing.
+        $stillMissing = $requiredFeatures | Where-Object {
+            (Get-WindowsFeature -Name $_).InstallState -ne 'Installed'
+        }
+        if ($stillMissing) {
+            Write-Warn 'These IIS features are still not installed after DISM:'
+            $stillMissing | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+            Abort 'Prerequisite IIS features could not be installed. Resolve manually and re-run.'
+        }
+        Write-Ok 'All required IIS features present (re-validated post-install)'
     } else {
         Write-Ok 'All required IIS features present'
     }
