@@ -134,6 +134,9 @@ public sealed class HealthController : ControllerBase
 
     private async Task<(string status, long latencyMs)> CheckAdConnectivityAsync()
     {
+        if (_healthSettings.Value.DisableAdConnectivityProbe)
+            return ("skipped", 0);
+
         var result = await _adProbe.CheckAsync(HttpContext.RequestAborted);
         var status = result.Status switch
         {
