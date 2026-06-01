@@ -183,3 +183,18 @@ Describe 'Sync-AppSettingsAgainstSchema: per-file backup + sync log' {
         (Get-Content $log.FullName -Raw) | Should -Match 'PortalLockoutThreshold'
     }
 }
+
+Describe 'Resolve-ConfigSyncMode: hosting-mode aware resolution' {
+    It 'returns Merge when -Force regardless of mode' {
+        Resolve-ConfigSyncMode -Requested '' -Force $true -IsUpgrade $false -Interactive $false | Should -Be 'Merge'
+    }
+    It 'returns None on a fresh non-interactive install' {
+        Resolve-ConfigSyncMode -Requested '' -Force $false -IsUpgrade $false -Interactive $false | Should -Be 'None'
+    }
+    It 'honors an explicit -ConfigSync value' {
+        Resolve-ConfigSyncMode -Requested 'Diff' -Force $false -IsUpgrade $true -Interactive $true | Should -Be 'Diff'
+    }
+    It 'returns Merge on a non-interactive upgrade (Service/Console unattended)' {
+        Resolve-ConfigSyncMode -Requested '' -Force $false -IsUpgrade $true -Interactive $false | Should -Be 'Merge'
+    }
+}

@@ -406,6 +406,33 @@ function Sync-AppSettingsAgainstSchema {
     }
 }
 
+# ─── Config sync mode resolution (STAB-010 / #24) ─────────────────────────────
+# Resolves the effective config-sync mode for ALL hosting modes (IIS, Service,
+# Console). Extracted from the inline $siteExists-keyed block so Service/Console
+# upgrades resolve correctly instead of always skipping the sync. Pure function:
+# no side effects beyond the interactive prompt, so it is unit-testable.
+
+function Resolve-ConfigSyncMode {
+    [CmdletBinding()]
+    param(
+        [string] $Requested,
+        [bool]   $Force,
+        [bool]   $IsUpgrade,
+        [bool]   $Interactive
+    )
+    if ($Requested) { return $Requested }
+    if ($Force)     { return 'Merge' }
+    if (-not $IsUpgrade) { return 'None' }          # fresh install: template copied verbatim
+    if (-not $Interactive) { return 'Merge' }       # unattended upgrade (Service/Console/CI): safe additive
+    $reply = Read-Host '  Config sync: [M]erge additions / [R]eview each / [D]ry-run diff / [S]kip? [M]'
+    switch -Regex ($reply) {
+        '^[Rr]' { 'Review' }
+        '^[Dd]' { 'Diff' }
+        '^[Ss]' { 'None' }
+        default { 'Merge' }
+    }
+}
+
 # ─── Schema Drift Check (plan 08-06 / STAB-012) ───────────────────────────────
 # Purely diagnostic check run AFTER sync. Reads the schema (D-17) as the
 # authoritative source for required keys and ALWAYS runs on upgrade (D-18)
@@ -1168,26 +1195,16 @@ if ($siteExists -and (Test-Path $prodConfig)) {
 # plan 08-05 and the drift-check rewrite in plan 08-06.
 
 Write-Step 'Resolving config sync mode'
-if (-not $ConfigSync) {
-    if ($Force) {
-        $ConfigSync = 'Merge'
-        Write-Ok "-Force specified - defaulting to -ConfigSync Merge"
-    } elseif ($siteExists) {
-        # Upgrade detected, interactive session — prompt per D-13.
-        $reply = Read-Host '  Config sync: [M]erge additions / [R]eview each / [S]kip? [M]'
-        $ConfigSync = switch -Regex ($reply) {
-            '^[Rr]' { 'Review' }
-            '^[Ss]' { 'None' }
-            default { 'Merge' }
-        }
-        Write-Ok "Config sync mode: $ConfigSync"
-    } else {
-        # Fresh install — template was just copied verbatim; nothing to sync.
-        $ConfigSync = 'None'
-    }
-} else {
-    Write-Ok "Config sync mode (from -ConfigSync param): $ConfigSync"
-}
+# Upgrade detection works across all hosting modes (#24 / STAB-010): an existing
+# IIS site OR a live appsettings.Production.json already in the target folder
+# => upgrade. Keying off $siteExists alone meant Service/Console upgrades always
+# fell through to the fresh-install branch and skipped the additive sync.
+$prodConfigForResolve = Join-Path $PhysicalPath 'appsettings.Production.json'
+$isUpgrade   = $siteExists -or (Test-Path $prodConfigForResolve)
+$interactive = -not $Force -and -not [System.Console]::IsInputRedirected
+$ConfigSync  = Resolve-ConfigSyncMode -Requested $ConfigSync -Force ([bool]$Force) `
+                   -IsUpgrade $isUpgrade -Interactive $interactive
+Write-Ok "Config sync mode: $ConfigSync"
 
 if ($HostingMode -eq 'IIS') {
 
