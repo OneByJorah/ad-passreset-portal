@@ -604,4 +604,22 @@ public class LdapPasswordChangeProviderTests
         Assert.False(policy!.RequiresComplexity);
         Assert.Equal(0, policy.HistoryLength);
     }
+
+    [Fact]
+    public async Task GetEffectivePasswordPolicyAsync_DomainRootSearchThrows_StillReturnsPolicy()
+    {
+        var (sut, fake) = Build();
+        fake.RootDse = MakeEntry("",
+            (LdapAttributeNames.MinPwdLength, "10"),
+            ("defaultNamingContext", "DC=corp,DC=example,DC=com"));
+        fake.OnSearchThrow("objectClass=domainDNS",
+            new DirectoryOperationException("simulated domain-root failure"));
+
+        var policy = await sut.GetEffectivePasswordPolicyAsync();
+
+        Assert.NotNull(policy);
+        Assert.Equal(10, policy!.MinLength);
+        Assert.False(policy.RequiresComplexity);
+        Assert.Equal(0, policy.HistoryLength);
+    }
 }
