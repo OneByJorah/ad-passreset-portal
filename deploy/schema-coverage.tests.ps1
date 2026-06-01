@@ -44,3 +44,28 @@ Describe 'production template validates against the schema' {
         $valid | Should -BeTrue -Because ($errs -join '; ')
     }
 }
+
+Describe 'PasswordChangeOptions.LocalPolicy schema parity' {
+    It 'defines BannedWordsPath, LocalPwnedPasswordsPath, MinBannedTermLength' {
+        $lp = $script:SchemaObj.properties.PasswordChangeOptions.properties.LocalPolicy.properties
+        $lp.PSObject.Properties.Name | Should -Contain 'BannedWordsPath'
+        $lp.PSObject.Properties.Name | Should -Contain 'LocalPwnedPasswordsPath'
+        $lp.PSObject.Properties.Name | Should -Contain 'MinBannedTermLength'
+        $lp.MinBannedTermLength.minimum | Should -Be 1
+        $lp.MinBannedTermLength.default | Should -Be 4
+    }
+    It 'validates a config that sets LocalPolicy.MinBannedTermLength' {
+        $tmp = Join-Path ([IO.Path]::GetTempPath()) "lp-$(New-Guid).json"
+        @'
+{ "WebSettings": { "EnableHttpsRedirect": true, "UseDebugProvider": false },
+  "PasswordChangeOptions": { "UseAutomaticContext": true, "PortalLockoutThreshold": 3, "LdapPort": 636,
+    "LocalPolicy": { "BannedWordsPath": null, "LocalPwnedPasswordsPath": null, "MinBannedTermLength": 4 } },
+  "SmtpSettings": { "Host": "", "Port": 587 },
+  "SiemSettings": { "Syslog": { "Enabled": false }, "AlertEmail": { "Enabled": false } },
+  "ClientSettings": {} }
+'@ | Set-Content -Path $tmp -Encoding UTF8
+        try {
+            Test-Json -Path $tmp -SchemaFile $script:Schema -ErrorAction SilentlyContinue | Should -BeTrue
+        } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
+    }
+}
