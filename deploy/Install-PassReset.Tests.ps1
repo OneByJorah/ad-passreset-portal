@@ -372,3 +372,11 @@ Describe 'CI: PowerShell quality gate present' {
         $script:Rel | Should -Match 'powershell-quality'
     }
 }
+Describe 'editorconfig: ps1 encoding policy' {
+    It 'has a [*.ps1...] section enforcing utf-8' {
+        $repo = Split-Path $PSScriptRoot -Parent
+        $ec = Get-Content (Join-Path $repo '.editorconfig') -Raw
+        $ec | Should -Match '\[\*\.\{ps1[^\]]*\}\]'
+        $ec | Should -Match 'charset = utf-8'
+    }
+}
