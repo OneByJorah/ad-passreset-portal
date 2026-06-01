@@ -65,3 +65,13 @@ Describe 'Get-SchemaKeyManifest: handles scalar/nullable leaves under StrictMode
         $paths | Should -Contain 'AdminSettings:LoopbackPort'
     }
 }
+
+Describe 'Get-SchemaKeyManifest: tolerates nodes without an explicit type (StrictMode)' {
+    It 'does not throw on a property node that omits type (e.g. $ref/enum-only)' {
+        # A schema where a property has no "type" (valid JSON Schema: enum-only).
+        $schema = '{ "type":"object", "properties": { "Mode": { "enum": ["A","B"], "default": "A" } } }' | ConvertFrom-Json
+        { Get-SchemaKeyManifest -Schema $schema } | Should -Not -Throw
+        $m = Get-SchemaKeyManifest -Schema $schema
+        @($m | ForEach-Object { $_.Path }) | Should -Contain 'Mode'
+    }
+}

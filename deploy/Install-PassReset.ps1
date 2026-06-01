@@ -175,7 +175,11 @@ function Get-SchemaKeyManifest {
         $node = $prop.Value
         $path = if ($Prefix) { "${Prefix}:${name}" } else { $name }
         $hasProperties = $node.PSObject.Properties.Name -contains 'properties'
-        $isObj = ($node.type -eq 'object') -or $hasProperties
+        # Membership-guard the .type access so Set-StrictMode -Version Latest does not throw on
+        # nodes that omit 'type' (valid JSON Schema: $ref/allOf/oneOf/enum-only/const). A missing
+        # type resolves to $null (-> not an object -> treated as a leaf, the safe default).
+        $nodeType = if ($node.PSObject.Properties.Name -contains 'type') { $node.type } else { $null }
+        $isObj = ($nodeType -eq 'object') -or $hasProperties
         if ($isObj) {
             # Recurse into nested object (don't emit a leaf for the object itself)
             $entries += Get-SchemaKeyManifest -Schema $node -Prefix $path
@@ -203,7 +207,7 @@ function Get-SchemaKeyManifest {
                 HasDefault     = $hasDefault
                 IsObsolete     = $isObsolete
                 ObsoleteSince  = $obsoleteSince
-                Type           = $node.type
+                Type           = $nodeType
             }
         }
     }
