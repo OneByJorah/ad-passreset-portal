@@ -289,3 +289,23 @@ Describe 'Install-PassReset: Test-HttpsBinding' {
         $result.HasHttps | Should -BeFalse
     }
 }
+
+Describe 'STAB-018 / #34 post-deploy health contract' {
+    BeforeAll {
+        $script:InstallerPath = Join-Path $PSScriptRoot 'Install-PassReset.ps1'
+        $script:InstallerText = Get-Content -Raw -Path $script:InstallerPath
+    }
+
+    It 'treats HTTP 200 from /api/health as deployment success' {
+        $script:InstallerText | Should -Match '\$lastHealth\.StatusCode -eq 200'
+    }
+
+    It 'queries the /api/health endpoint during post-deploy verification' {
+        $script:InstallerText | Should -Match '/api/health'
+    }
+
+    It 'hard-fails the install when the health check never returns 200' {
+        $script:InstallerText | Should -Match 'Post-deploy health check failed'
+        $script:InstallerText | Should -Match 'exit 1'
+    }
+}
