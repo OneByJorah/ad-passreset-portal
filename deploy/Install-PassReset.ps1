@@ -1,5 +1,4 @@
-﻿#Requires -Version 7.0
-<#
+﻿<#
 .SYNOPSIS
     Installs PassReset on IIS (Windows Server 2019 / 2022 / 2025, IIS 10).
 
@@ -11,6 +10,10 @@
       4. Sets NTFS permissions for the app pool identity.
       5. Writes a starter appsettings.Production.json with placeholders.
       6. Optionally binds an existing HTTPS certificate.
+      7. On upgrade: syncs appsettings.Production.json against the bundled schema —
+         adds missing keys from defaults, reports/removes obsolete keys, backs up
+         the file first, and writes a durable sync log. Runs on IIS, Service, and
+         Console hosting modes. See -ConfigSync.
 
 .PARAMETER SiteName
     Name of the IIS site to create or update. Default: PassReset
@@ -69,6 +72,25 @@
     Skip the interactive upgrade confirmation prompt when an existing installation is detected.
     Use this for unattended / CI deployments.
 
+.PARAMETER ConfigSync
+    Controls how appsettings.Production.json is reconciled with the schema on upgrade.
+    Modes:
+      Merge  - Add missing keys from schema defaults; report obsolete keys (never removed).
+               Existing values are NEVER modified.
+      Review - Interactively prompt to add each missing key and to remove each obsolete key.
+      Diff   - Dry-run: print every key that WOULD be added and which obsolete keys are
+               present, then exit WITHOUT writing the file or creating a backup.
+      None   - Skip sync entirely.
+
+    Default (when omitted): resolved at runtime —
+      * Fresh install  -> None (template copied verbatim).
+      * Upgrade + -Force or non-interactive (Service/Console/CI) -> Merge (safe, additive).
+      * Interactive upgrade -> prompts the operator to choose Merge/Review/Diff/Skip.
+
+    Merge is safe: it only adds keys and never changes existing values. Before any write,
+    a timestamped backup (<config>_<yyyyMMdd-HHmmss>.bak) and a sync log
+    (<config>_sync-<timestamp>.log) are created next to appsettings.Production.json.
+
 .EXAMPLE
     # Minimal — uses built-in app pool identity, no HTTPS binding wired yet:
     .\Install-PassReset.ps1
@@ -81,7 +103,16 @@
         -CertThumbprint  "A1B2C3D4E5F6..." `
         -LdapPassword    (Read-Host 'LDAP password' -AsSecureString) `
         -SmtpPassword    (Read-Host 'SMTP password' -AsSecureString)
+
+.EXAMPLE
+    # Preview config changes on upgrade without writing anything:
+    .\Install-PassReset.ps1 -ConfigSync Diff -Force
+
+.EXAMPLE
+    # Unattended upgrade that adds any new keys from schema defaults:
+    .\Install-PassReset.ps1 -Force -ConfigSync Merge
 #>
+#Requires -Version 7.0
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string] $SiteName        = 'PassReset',
@@ -99,7 +130,7 @@ param(
     [SecureString] $SmtpPassword        = $null,
     [SecureString] $RecaptchaPrivateKey  = $null,
 
-    [ValidateSet('Merge','Review','None')]
+    [ValidateSet('Merge','Review','None','Diff')]
     [string] $ConfigSync = '',   # empty -> resolved post-upgrade-detection: prompt if interactive, 'Merge' if -Force, 'None' if fresh install
 
     [switch] $Force,

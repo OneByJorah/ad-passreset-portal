@@ -246,3 +246,22 @@ Describe 'Diff mode produces human-readable output (STAB-011)' {
         $out | Should -Match 'No file written'
     }
 }
+
+Describe 'Help: -ConfigSync is documented (STAB-011)' {
+    BeforeAll {
+        $script:help = Get-Help (Join-Path $PSScriptRoot 'Install-PassReset.ps1') -Full
+    }
+    It 'documents the ConfigSync parameter' {
+        $p = $script:help.parameters.parameter | Where-Object { $_.name -eq 'ConfigSync' }
+        $p | Should -Not -BeNullOrEmpty
+        $text = ($p.description.Text -join ' ')
+        foreach ($mode in 'Merge','Review','None','Diff') { $text | Should -Match $mode }
+    }
+    It 'DESCRIPTION mentions the config sync step' {
+        ($script:help.description.Text -join ' ') | Should -Match '(?i)config'
+    }
+    It 'accepts -ConfigSync Diff at the param binding (ValidateSet includes Diff)' {
+        $env:PASSRESET_TEST_MODE = '1'
+        { . (Join-Path $PSScriptRoot 'Install-PassReset.ps1') -ConfigSync Diff } | Should -Not -Throw
+    }
+}
