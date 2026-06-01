@@ -53,6 +53,20 @@ jobs:
           }
           Write-Host 'Schema validation passed.'
 
+      - name: Schema-drift gate (schema covers every appsettings.json section)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.0.0' })) {
+            Install-Module Pester -MinimumVersion 5.5.0 -Force -Scope CurrentUser -SkipPublisherCheck
+          }
+          $r = Invoke-Pester -Path deploy/schema-coverage.tests.ps1 -PassThru -Output Detailed
+          if ($r.FailedCount -gt 0) {
+            Write-Host "::error::appsettings.schema.json is missing sections present in appsettings.json (STAB-008 drift gate). $($r.FailedCount) check(s) failed."
+            exit 1
+          }
+          Write-Host 'Schema-drift gate passed: schema covers all config sections.'
+
       - name: Build solution
         run: dotnet build src/PassReset.sln --no-restore --configuration Release
 
