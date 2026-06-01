@@ -12,6 +12,69 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.0.0] — 2026-06-01
+
+Major release. Adds a cross-platform LDAP provider, an offline/local password policy, a loopback admin UI with encrypted secret storage, and pluggable Windows hosting modes (IIS / Service / Console) — plus a self-signed-certificate fallback for the installer. **Existing IIS deployments upgrade with no config changes; all new features are opt-in.**
+
+### Added
+
+**Cross-platform LDAP provider (Phase 11)**
+
+- **`PassReset.PasswordProvider.Ldap`** — a new `net10.0` provider implementing `IPasswordChangeProvider` over `System.DirectoryServices.Protocols.LdapConnection`, working on Windows, Linux, and macOS. *(provider)*
+- **`PasswordChangeOptions.ProviderMode`** — new `Auto | Windows | Ldap` selector. `Auto` (default) picks the Windows provider on Windows, so existing deployments are unaffected. *(web, provider)*
+- **Service-account LDAP binding** — `ServiceAccountDn`, `ServiceAccountPassword`, `BaseDn`, `LdapHostnames`, `LdapPort`, `LdapUseSsl`, and `LdapTrustedCertificateThumbprints`. `ServiceAccountPassword` binds from the `PasswordChangeOptions__ServiceAccountPassword` env var. *(web, provider)*
+- **`IAdConnectivityProbe`** — AD-reachability seam for the health endpoint, with `DomainJoinedProbe` (Windows) and `LdapTcpProbe` (cross-platform) implementations. *(web, provider)*
+- **Samba DC CI integration test** — a GitHub Actions job spins up a Samba AD DC container and runs end-to-end change-password flows against the LDAP provider. *(ci)*
+
+**Local offline password policy (Phase 12)**
+
+- **`LocalPolicyPasswordChangeProvider`** — outermost decorator enforcing two optional offline checks before any AD round-trip: a case-insensitive **banned-words list** and a **local HIBP SHA-1 corpus** (air-gapped alternative to the remote HIBP API). When `LocalPwnedPasswordsPath` is configured, remote HIBP calls are disabled automatically. See `docs/LocalPasswordPolicy-Setup.md`. *(common, web)*
+- **New `ApiErrorCode` values** — `BannedWord` (20) and `LocallyKnownPwned` (21), surfaced with a deliberately identical client message so the matching list is not leaked. *(common, web)*
+- **New config** — `PasswordChangeOptions.LocalPolicy.BannedWordsPath`, `LocalPwnedPasswordsPath`, and `MinBannedTermLength` (default `4`).
+
+**Loopback admin UI + encrypted secret storage (Phase 13)**
+
+- **Admin website at `/admin`** for editing operator-owned configuration, bound to `127.0.0.1:<LoopbackPort>` on a dedicated Kestrel listener — socket-level isolation, never reachable over the public HTTPS binding. *(web)*
+- **Encrypted secret storage (`secrets.dat`)** via ASP.NET Core Data Protection. Non-secrets stay in plaintext `appsettings.Production.json`; env-var overrides still take precedence. See `docs/Admin-UI.md`. *(web)*
+- **New config** — `AdminSettings.Enabled` (default `false`, opt-in), `LoopbackPort` (default `5010`), `KeyStorePath`, `DataProtectionCertThumbprint` (Linux only), and overridable `AppSettingsFilePath` / `SecretsFilePath`.
+
+**Windows hosting modes — IIS / Service / Console (Phase 14)**
+
+- **`-HostingMode IIS|Service|Console`** installer parameter (`IIS` default). The same `PassReset.exe` runs under IIS via the ASP.NET Core Module, as a Windows Service (`Microsoft.Extensions.Hosting.WindowsServices`), or as a console app for development and diagnostics. *(installer, web)*
+- **`KestrelHttpsCertOptions`** — Service-mode TLS via cert-by-thumbprint or cert-by-PFX, configured through `Kestrel:HttpsCert:Thumbprint` / `PfxPath` / `PfxPassword`. *(web)*
+- **Installer preflight + service-aware uninstall** — cert resolution, port availability, and service-account checks run before any IIS or Service changes (IIS is not touched on a failed migration); `Uninstall-PassReset.ps1` detects and removes the `PassReset` Windows Service before IIS teardown. New params `-ServiceAccount`, `-PfxPath`, `-PfxPassword`. *(installer)*
+
+**Installer self-signed certificate fallback**
+
+- **`-AllowSelfSignedCertificate` switch** (default `$true`). When the installer runs without `-CertThumbprint` or `-PfxPath`, it auto-generates a self-signed cert in `Cert:\LocalMachine\My` (RSA 2048, SHA-256, 2-year validity, hostname + FQDN + `localhost` SANs, Server Authentication EKU) and uses it for the HTTPS binding. Idempotent across re-runs; emits a warning that browsers will flag the site as untrusted. Covers both IIS and Service modes. Pass `-AllowSelfSignedCertificate:$false` to disable. For production, continue to supply a real cert via `-CertThumbprint` or `-PfxPath`. *(installer)*
+
+### Changed
+
+- **`PassReset.Web` and `PassReset.Tests` retargeted to `net10.0`** — the Windows provider is now a conditional `ProjectReference` gated on `$(OS) == 'Windows_NT'` behind a `WINDOWS_PROVIDER` compile constant; Windows-only tests moved to `PassReset.Tests.Windows` (`net10.0-windows`). *(web, test)*
+- **`HealthController` no longer references `System.DirectoryServices.AccountManagement`** — AD reachability is delegated to the injected `IAdConnectivityProbe`. *(web)*
+
+### Security
+
+- **Admin endpoint isolation** — socket-level loopback binding (`127.0.0.1:<LoopbackPort>`) keeps admin endpoints off the public listener.
+- **Data Protection purpose isolation** — the `PassReset.Configuration.v1` purpose prevents cross-use of secret ciphertext with other Data Protection consumers.
+- **Antiforgery tokens** required on all admin POSTs.
+- **Restrictive key-ring ACL** — the installer provisions `<install-dir>/keys` with a hardened NTFS ACL (app pool Modify, Administrators FullControl, inheritance disabled) and no longer rewrites the ACL on upgrade.
+
+### Fixed
+
+- **Installer: PowerShell 7 / IISAdministration migration and self-signed cert auto-generation.** A series of hardening passes made `Install-PassReset.ps1` run correctly on PowerShell 7 IIS hosts: every drive-dependent and typed-object path was migrated from `WebAdministration`'s `IIS:\` PSDrive (unreachable across the WinPSCompat remoting boundary) to PS Core-native `IISAdministration` cmdlets and the low-level config API — covering app-pool identity reads/writes, site physical-path writes, HTTPS cert attachment, binding add/remove, and port-80 conflict detection. PS 7-removed cmdlets were replaced with .NET equivalents (`New-EventLog` → `[System.Diagnostics.EventLog]::CreateEventSource`), `Stop-IISCommitDelay -Commit` corrected to take a `[Boolean]`, IIS prerequisite checks gated on `-HostingMode IIS`, and `sc.exe delete` exit codes are now verified. *(installer)*
+
+### Breaking
+
+- None for Windows upgraders running with default config. `ProviderMode` defaults to `Auto` (Windows provider on Windows), `AdminSettings.Enabled` defaults to `false`, and `-HostingMode` defaults to `IIS` — matching v1.x behavior.
+
+### Known Limitations
+
+- **Linux deployment of the web host remains blocked** by the Phase-11 conditional TFM (NuGet refuses to restore a `net10.0` project with a `ProjectReference` to a `net10.0-windows` one, even behind a `<Condition>` guard). The LDAP provider, local policy, admin UI, and Service hosting are ready for Windows operators; full Linux hosting requires multi-targeting `PassReset.PasswordProvider`, deferred to a follow-up.
+- **`UserCannotChangePassword` ACE check is deferred on the LDAP provider** — AD's server-side modify rejection still enforces the restriction; the error message is just less specific on Linux.
+
+---
+
 ## [2.0.0-alpha.8] — 2026-04-24
 
 Installer now auto-generates a self-signed certificate when none is supplied. No application code changes.

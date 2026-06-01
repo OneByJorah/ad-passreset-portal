@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import LockPersonIcon from '@mui/icons-material/LockPerson';
@@ -12,14 +12,11 @@ interface Props {
 export default function BrandHeader({ branding }: Props) {
   const portalName = branding?.portalName ?? 'PassReset';
   const logoFile = branding?.logoFileName;
-  const [logoFailed, setLogoFailed] = useState(false);
+  // Track which file failed rather than a bare boolean, so a new logoFile
+  // re-shows the image without a reset-state-in-effect. (react-hooks/set-state-in-effect)
+  const [failedFile, setFailedFile] = useState<string | undefined>(undefined);
 
-  // Reset failure state when the source file name changes.
-  useEffect(() => {
-    setLogoFailed(false);
-  }, [logoFile]);
-
-  const showLogo = logoFile && !logoFailed;
+  const showLogo = logoFile && failedFile !== logoFile;
 
   return (
     <Stack direction="row" alignItems="center" spacing={1}>
@@ -27,7 +24,7 @@ export default function BrandHeader({ branding }: Props) {
         <img
           src={`/brand/${logoFile}`}
           alt={portalName}
-          onError={() => setLogoFailed(true)}
+          onError={() => setFailedFile(logoFile)}
           style={{ maxHeight: 48, maxWidth: 200, objectFit: 'contain' }}
         />
       ) : (

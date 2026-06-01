@@ -31,6 +31,62 @@ Secret handling: [`docs/Secret-Management.md`](docs/Secret-Management.md).
 
 ## Version-specific notes
 
+### v2.0.0 — Cross-platform provider, local policy, admin UI, hosting modes
+
+**No breaking changes for existing IIS deployments.** Every v2.0 capability is opt-in. An
+existing Windows / IIS install upgrades with the standard procedure above and keeps working
+unchanged — `PasswordChangeOptions.ProviderMode` defaults to `Auto`, which selects the Windows
+provider on Windows, and that provider is byte-for-byte identical to v1.4.x. No
+`appsettings.Production.json` edits are required to upgrade.
+
+The four new feature areas below are all disabled or no-op by default. Adopt any of them only
+if you want the new behavior; pull the relevant keys from
+`deploy\appsettings.Production.template.json` after upgrading (the installer's schema sync
+adds missing keys from the schema's defaults without touching your existing values).
+
+#### Cross-platform LDAP provider (`ProviderMode`)
+
+PassReset now ships a cross-platform `LdapPasswordChangeProvider` backed by
+`System.DirectoryServices.Protocols`, enabling Linux / macOS / Docker hosting.
+`PasswordChangeOptions.ProviderMode` controls selection:
+
+| Value | Behavior |
+|-------|----------|
+| `Auto` (default) | Windows provider on Windows, LDAP provider elsewhere. Windows operators see no change. |
+| `Windows` | Force the Windows provider (fails to start on non-Windows). |
+| `Ldap` | Force the cross-platform provider on every host. On Windows, use only for parity testing. |
+
+Full operator setup (service account, the "Change Password" extended-right grant, and LDAPS CA
+trust on Linux) is in [`docs/AD-ServiceAccount-LDAP-Setup.md`](docs/AD-ServiceAccount-LDAP-Setup.md).
+Changing `ProviderMode` requires an app restart — provider selection is captured once at startup.
+
+#### Optional offline password policy
+
+New `PasswordChangeOptions.LocalPolicy` block enables operator-managed, air-gapped password
+rules: a banned-words list (`BannedWordsPath`) and a bulk HIBP SHA-1 corpus
+(`LocalPwnedPasswordsPath`) for offline breach lookups. When `LocalPwnedPasswordsPath` is set,
+remote HIBP is disabled. All keys default to empty/disabled, so omitting the block preserves
+v1.4.x behavior (remote HIBP). See [`docs/LocalPasswordPolicy-Setup.md`](docs/LocalPasswordPolicy-Setup.md).
+
+#### Loopback-only admin UI (opt-in)
+
+A new `AdminSettings` block adds a `127.0.0.1`-bound configuration UI with encrypted secret
+storage. It is **off by default** (`AdminSettings.Enabled: false`) and never exposed on the
+public HTTPS binding. Enable it only if you want browser-based config editing. See
+[`docs/Admin-UI.md`](docs/Admin-UI.md) for the access model and Data Protection key-ring setup.
+
+#### Windows hosting modes (IIS / Service / Console)
+
+`Install-PassReset.ps1` now supports `-HostingMode IIS|Service|Console`. **IIS remains the
+default** — upgrades to an existing IIS install stay on IIS with no flag required, and the
+upgrade path is unchanged from earlier releases. The Windows Service and Console modes are
+opt-in alternatives selected at install time; migrating an IIS install to Service mode is a
+deliberate operator choice, not an automatic side effect of upgrading.
+
+If you supply no certificate, the installer can now auto-generate a self-signed certificate
+(`-AllowSelfSignedCertificate`, default on). For production, continue supplying a real cert via
+`-CertThumbprint` or `-PfxPath`.
+
 ### v1.4.0 — Configuration schema and sync
 
 Phase 8 introduces a JSON Schema (`appsettings.schema.json`) that governs every valid key in

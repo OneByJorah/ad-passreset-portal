@@ -5,27 +5,25 @@ import type { PolicyResponse } from '../types/settings';
 
 export function usePolicy(enabled: boolean) {
   const [policy, setPolicy] = useState<PolicyResponse | null>(null);
-  const [loading, setLoading] = useState(enabled);
+  const [fetched, setFetched] = useState(false);
 
   useEffect(() => {
-    if (!enabled) {
-      setLoading(false);
-      setPolicy(null);
-      return;
-    }
+    if (!enabled) return;
 
     let cancelled = false;
-    setLoading(true);
     fetchPolicy().then((p) => {
       if (cancelled) return;
       setPolicy(p);
-      setLoading(false);
+      setFetched(true);
     });
 
     return () => {
       cancelled = true;
     };
   }, [enabled]);
+
+  // Derived, not stored: loading is true only while an enabled fetch is in flight.
+  const loading = enabled && !fetched;
 
   return { policy, loading };
 }
