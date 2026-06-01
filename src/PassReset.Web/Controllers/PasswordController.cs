@@ -141,6 +141,8 @@ public sealed class PasswordController : ControllerBase
     {
         var clientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
+        Audit("AttemptStarted", model.Username, clientIp, SiemEventType.PasswordChangeAttemptStarted);
+
         if (!ModelState.IsValid)
         {
             Audit("ValidationFailed", model.Username, clientIp, SiemEventType.ValidationFailed);

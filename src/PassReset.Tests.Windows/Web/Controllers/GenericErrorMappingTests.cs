@@ -420,4 +420,18 @@ public class GenericErrorMappingTests : IDisposable
         Assert.DoesNotContain("BrandNewP@ssword123", failEvent.Detail ?? string.Empty);
         Assert.DoesNotContain("OldPassword1!", failEvent.Detail ?? string.Empty);
     }
+
+    [Fact]
+    public async Task Post_EmitsPasswordChangeAttemptStarted_AtEntry()
+    {
+        using var factory = new ProductionEnvFactoryWithRecorder();
+        using var client  = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        await client.PostAsJsonAsync("/api/password", MakeRequest("invalidCredentials"));
+
+        Assert.Contains(SiemEventType.PasswordChangeAttemptStarted, factory.Recorder.Events);
+    }
 }
