@@ -176,6 +176,33 @@ public class GenericErrorMappingTests : IDisposable
     }
 
     /// <summary>
+    /// STAB-013 gap closure: Production env + recording SIEM + portal lockout ENABLED
+    /// (PortalLockoutThreshold=3, not 0). Lets tests drive the lockout decorator's
+    /// ApproachingLockout (failure #3) and PortalLockout (failure #4) codes and assert
+    /// they are NOT collapsed to Generic on the wire — they leak only per-account
+    /// throttling state, never directory membership.
+    /// </summary>
+    public sealed class ProductionEnvFactoryWithEnabledLockout : WebApplicationFactory<Program>
+    {
+        public RecordingSiemService Recorder { get; } = new();
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Production");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                var cfg = TestConfig();
+                cfg["PasswordChangeOptions:PortalLockoutThreshold"] = "3"; // enable lockout
+                config.AddInMemoryCollection(cfg);
+            });
+            builder.ConfigureTestServices(services =>
+            {
+                SwapInDebugProvider(services);
+                SwapInRecordingSiem(services, Recorder);
+            });
+        }
+    }
+
+    /// <summary>
     /// Baseline development env — granular error codes must still reach the wire
     /// (D-03 locks env-based gate, no config flag).
     /// </summary>
@@ -313,5 +340,33 @@ public class GenericErrorMappingTests : IDisposable
 
         Assert.Contains(SiemEventType.UserNotFound, factory.Recorder.Events);
         Assert.DoesNotContain(SiemEventType.Generic, factory.Recorder.Events);
+    }
+
+    /// <summary>
+    /// STAB-013 gap closure: with portal lockout enabled, the THIRD invalid-credential
+    /// attempt is upgraded by the decorator to ApproachingLockout. This code is NOT an
+    /// account-enumeration oracle (it reveals only that THIS portal is throttling THIS
+    /// account, not whether the account exists in AD), so it must reach the wire intact
+    /// in Production — and the SIEM must record the granular ApproachingLockout event.
+    /// </summary>
+    [Fact]
+    public async Task Production_ApproachingLockout_WirePreservesCode()
+    {
+        using var factory = new ProductionEnvFactoryWithEnabledLockout();
+        using var client  = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        HttpResponseMessage response = null!;
+        for (int i = 0; i < 3; i++)
+            response = await client.PostAsJsonAsync("/api/password", MakeRequest("invalidCredentials"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.NotNull(result);
+        Assert.Single(result!.Errors);
+        Assert.Equal(ApiErrorCode.ApproachingLockout, result.Errors[0].ErrorCode);
+        Assert.Contains(SiemEventType.ApproachingLockout, factory.Recorder.Events);
     }
 }
