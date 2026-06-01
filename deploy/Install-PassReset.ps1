@@ -256,6 +256,24 @@ function Get-DoneBannerMessage {
     return 'PassReset upgraded successfully.'
 }
 
+function Resolve-HealthHostHeader {
+    <#
+        STAB-019: derive the host the post-deploy health check should target from an
+        IIS binding's BindingInformation ("*:port:hostname"). A wildcard/empty host
+        means "all hostnames" - fall back to the machine name so the loopback request
+        actually resolves.
+    #>
+    param(
+        [string] $BindingInformation,
+        [string] $Fallback
+    )
+    if ([string]::IsNullOrWhiteSpace($BindingInformation)) { return $Fallback }
+    $parts = $BindingInformation -split ':'
+    $hostName = if ($parts.Count -ge 3) { $parts[2] } else { '' }
+    if ([string]::IsNullOrWhiteSpace($hostName)) { return $Fallback }
+    return $hostName
+}
+
 # STAB-016: validate that an HTTPS binding exists on the configured port. Pure function
 # (takes a binding collection) so Pester can exercise it without a live IIS site. Returns
 # a small object the caller uses to Write-Ok / Write-Warn (warn-not-block per D-13).

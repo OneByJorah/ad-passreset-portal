@@ -556,3 +556,15 @@ Describe 'Docs: reconfigure parameter is real and documented' {
         if ($docMentions) { $names | Should -Contain 'Reconfigure' }
     }
 }
+
+Describe 'Install-PassReset: Resolve-HealthHostHeader' {
+    It 'extracts a custom hostname from BindingInformation *:443:passreset.corp.local' {
+        Resolve-HealthHostHeader -BindingInformation '*:443:passreset.corp.local' -Fallback 'HOST01' | Should -Be 'passreset.corp.local'
+    }
+    It 'falls back to COMPUTERNAME for a wildcard binding *:80:' {
+        Resolve-HealthHostHeader -BindingInformation '*:80:' -Fallback 'HOST01' | Should -Be 'HOST01'
+    }
+    It 'falls back when BindingInformation is null/empty' {
+        Resolve-HealthHostHeader -BindingInformation $null -Fallback 'HOST01' | Should -Be 'HOST01'
+    }
+}
