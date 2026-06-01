@@ -110,6 +110,17 @@ public class EnvironmentVariableOverrideTests : IDisposable
     }
 
     [Fact]
+    public void EnvVar_ServiceAccountPassword_OverridesAppsettings()
+    {
+        SetEnv("PasswordChangeOptions__ServiceAccountPassword", "svc-from-env");
+
+        using var factory = new EnvVarFactory();
+        var options = factory.Services.GetRequiredService<IOptions<PasswordChangeOptions>>();
+
+        Assert.Equal("svc-from-env", options.Value.ServiceAccountPassword);
+    }
+
+    [Fact]
     public async Task EnvVar_RecaptchaPrivateKey_NotLeakedInGetResponse()
     {
         SetEnv("ClientSettings__Recaptcha__PrivateKey", "from-env-recaptcha-secret-do-not-leak");
