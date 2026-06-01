@@ -603,3 +603,19 @@ Describe 'Install-PassReset: health host-header wiring' {
         $script:Src | Should -Match 'Resolve-HealthHostHeader[^\r\n]*-Fallback[^\r\n]*COMPUTERNAME'
     }
 }
+
+Describe 'Install-PassReset: health block validation wiring' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    It 'gates success on Test-HealthResponseHealthy, not just StatusCode 200' {
+        $script:Src | Should -Match 'Test-HealthResponseHealthy'
+    }
+    It 'emits Get-HealthFailureDiagnostics on failure' {
+        $script:Src | Should -Match 'Get-HealthFailureDiagnostics'
+    }
+    It 'still exits 1 on final failure' {
+        $script:Src | Should -Match 'exit 1'
+    }
+    It 'still bypasses under -SkipHealthCheck' {
+        $script:Src | Should -Match 'if \(-not \$SkipHealthCheck\)'
+    }
+}

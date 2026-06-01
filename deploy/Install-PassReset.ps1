@@ -1820,7 +1820,8 @@ if (-not $SkipHealthCheck) {
         try {
             $lastHealth   = Invoke-WebRequest -Uri "$baseUrl/api/health"   -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
             $lastSettings = Invoke-WebRequest -Uri "$baseUrl/api/password" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-            if ($lastHealth.StatusCode -eq 200 -and $lastSettings.StatusCode -eq 200) {
+            if ($lastHealth.StatusCode -eq 200 -and $lastSettings.StatusCode -eq 200 -and
+                (Test-HealthResponseHealthy -HealthJson $lastHealth.Content)) {
                 $ok = $true
             }
         } catch {
@@ -1829,7 +1830,10 @@ if (-not $SkipHealthCheck) {
     } while (-not $ok -and $attempt -lt $maxAttempts)
 
     if (-not $ok) {
-        $bodySnippet = if ($lastHealth) { $lastHealth.Content } else { "(no response)" }
+        $healthLogsPath = Join-Path $env:SystemDrive 'inetpub\logs\PassReset'
+        $bodySnippet = if ($lastHealth) { $lastHealth.Content } else { '(no response)' }
+        Write-Host ''
+        Write-Host (Get-HealthFailureDiagnostics -BaseUrl $baseUrl -LogsPath $healthLogsPath) -ForegroundColor Yellow
         Write-Error ("Post-deploy health check failed after {0} attempts. Last /api/health response: {1}" -f $maxAttempts, $bodySnippet)
         exit 1
     }
