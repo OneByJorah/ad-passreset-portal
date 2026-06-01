@@ -318,4 +318,25 @@ public class RateLimitAndRecaptchaTests
         var result = await ReadResultAsync(response);
         Assert.Contains(result!.Errors, e => e.ErrorCode == ApiErrorCode.InvalidCaptcha);
     }
+
+    [Fact]
+    public async Task Recaptcha_ProviderUnreachable_FailSafeDisabled_Returns400()
+    {
+        using var factory = new StubbedRecaptchaFactory(
+            _ => throw new HttpRequestException("simulated network failure"),
+            failOpen: false);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var req = MakeRequest("alice");
+        req.Recaptcha = "any-token";
+
+        var response = await client.PostAsJsonAsync("/api/password", req);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.Contains(result!.Errors, e => e.ErrorCode == ApiErrorCode.InvalidCaptcha);
+    }
 }
