@@ -1,10 +1,10 @@
 # PassReset — Roadmap
 
-**Milestone chain:** v1.2.3 ✅ → v1.3.0 ✅ → v1.3.1 ✅ → v1.3.2 ✅ → v1.4.0 (active) → v2.0.0 (queued)
+**Milestone chain:** v1.2.3 ✅ → v1.3.0 ✅ → v1.3.1 ✅ → v1.3.2 ✅ → v1.4.0 ✅ → v2.0.0 ✅ (GA cut as v2.0.1)
 **Granularity:** coarse
 **Parallelization:** enabled
 **Created:** 2026-04-14
-**Last updated:** 2026-04-16
+**Last updated:** 2026-06-01
 
 ## Shipped Milestones
 
@@ -12,22 +12,24 @@
 - ✅ **v1.3.0 Test Foundation + UX Features** (2026-04-15) — QA-001 + FEAT-001..004. See [`milestones/v1.3.0-ROADMAP.md`](milestones/v1.3.0-ROADMAP.md).
 - ✅ **v1.3.1 AD Diagnostics** (2026-04-15) — BUG-004. See [`milestones/v1.3.1-ROADMAP.md`](milestones/v1.3.1-ROADMAP.md).
 - ✅ **v1.3.2 Diagnostics Code Review Fixes** (2026-04-16) — WR-01..03 rollup on top of v1.3.1. See [`milestones/v1.3.2-ROADMAP.md`](milestones/v1.3.2-ROADMAP.md).
+- ✅ **v1.4.0 Stabilization** (2026-04) — STAB-001..021 across Phases 7–10 (installer, config schema/sync, security hardening, operational readiness).
+- ✅ **v2.0.0 Platform Evolution** (2026-06-01, GA cut as **v2.0.1**) — Phases 11–14: cross-platform LDAP provider, local offline password policy, loopback admin UI + encrypted secrets, pluggable Windows hosting modes.
 
-## Active Phases — v1.4.0 (Stabilization)
+## v1.4.0 (Stabilization) — ✅ Complete
 
-Source: 21 GitHub issues (#19–#39) opened 2026-04-16. Must ship before v2.0 work begins.
+Source: 21 GitHub issues (#19–#39) opened 2026-04-16.
 
-- [x] **Phase 7: Installer & Deployment Fixes** — STAB-001..006 (gh#19, #20, #21, #23, #36, #39) ✓ 2026-04-16 (human UAT pending)
-- [ ] **Phase 8: Configuration Schema & Sync** — STAB-007..012 (gh#22, #24, #25, #26, #27, #37)
-- [ ] **Phase 9: Security Hardening** — STAB-013..017 (gh#28, #29, #30, #32, #33)
-- [x] **Phase 10: Operational Readiness** — STAB-018..021 (gh#31, #34, #35, #38) ✓ 2026-04-20 (STAB-019 operator UAT deferred)
+- [x] **Phase 7: Installer & Deployment Fixes** — STAB-001..006 (gh#19, #20, #21, #23, #36, #39) ✓ 2026-04-16
+- [x] **Phase 8: Configuration Schema & Sync** — STAB-007..012 (gh#22, #24, #25, #26, #27, #37) ✓
+- [x] **Phase 9: Security Hardening** — STAB-013..017 (gh#28, #29, #30, #32, #33) ✓
+- [x] **Phase 10: Operational Readiness** — STAB-018..021 (gh#31, #34, #35, #38) ✓ 2026-04-20
 
-## Queued Phases — v2.0.0 (Platform evolution)
+## v2.0.0 (Platform evolution) — ✅ Shipped (GA = v2.0.1)
 
-- [ ] **Phase 11: v2.0 Multi-OS PoC** — Research cross-platform path and produce Docker PoC *(was Phase 4)*
-- [ ] **Phase 12: v2.0 Local Password DB** — Operator-managed banned-words + attempted-pwned lookup store *(was Phase 5)*
-- [ ] **Phase 13: v2.0 Secure Config Storage** — Eliminate cleartext secrets from appsettings.Production.json *(was Phase 6)*
-- [ ] **Phase 14: v2.0 Web Admin Configuration UI** — Localhost-only web surface for editing appsettings.Production.json (schema-validated, restart-aware)
+- [x] **Phase 11: Cross-platform LDAP provider** — `PassReset.PasswordProvider.Ldap` + `ProviderMode` (Auto/Windows/Ldap) *(was Phase 4)* ✓
+- [x] **Phase 12: Local Password DB** — operator-managed banned-words + local HIBP corpus via `LocalPolicyPasswordChangeProvider` *(was Phase 5)* ✓
+- [x] **Phase 13: Secure Config Storage + Admin UI** — loopback admin UI + encrypted `secrets.dat` via Data Protection *(was Phase 6)* ✓
+- [x] **Phase 14: Pluggable Windows hosting modes** — `-HostingMode IIS|Service|Console` + IISAdministration/PS7 migration + self-signed cert fallback ✓
 
 ## Phase Details
 
@@ -117,7 +119,7 @@ Source: 21 GitHub issues (#19–#39) opened 2026-04-16. Must ship before v2.0 wo
   2. A Docker image builds from the repo and performs a successful password change against a test AD without `S.DS.AM`
   3. An explicit go/no-go decision on full Linux support is captured in `PROJECT.md` Key Decisions
   4. A provider abstraction boundary is identified (or confirmed sufficient) such that future cross-platform work doesn't require a rewrite
-**Plans**: TBD
+**Plans**: Executed via superpowers subagent-driven-development (not enumerated here) — ✅ shipped in v2.0
 
 ### Phase 12: v2.0 Local Password DB
 **Goal**: Operators can enforce banned-word and attempted-pwned rules locally, independent of (and stricter than) AD policy
@@ -130,7 +132,7 @@ Source: 21 GitHub issues (#19–#39) opened 2026-04-16. Must ship before v2.0 wo
   2. A local attempted-pwned lookup store exists and is consulted during password change; matches reject the change with a distinct `ApiErrorCode`
   3. Local rules are enforced even when AD would accept the password (strictly additive)
   4. Any borrowed logic (e.g., from lithnet/ad-password-protection) has a LICENSE-compatible integration documented in the repo
-**Plans**: TBD
+**Plans**: Executed via superpowers subagent-driven-development (not enumerated here) — ✅ shipped in v2.0
 
 ### Phase 13: v2.0 Secure Config Storage
 **Goal**: Secrets in `appsettings.Production.json` are never stored as cleartext on disk by default, with a clear upgrade path for existing installs
@@ -143,14 +145,14 @@ Source: 21 GitHub issues (#19–#39) opened 2026-04-16. Must ship before v2.0 wo
   2. A fresh install has no cleartext secrets on disk by default
   3. An existing v1.4.x install can upgrade to v2.0 and migrate its secrets following a documented procedure in `UPGRADING.md`
   4. `docs/Secret-Management.md` reflects the new default and documents fallback/override knobs
-**Plans**: TBD
+**Plans**: Executed via superpowers subagent-driven-development (not enumerated here) — ✅ shipped in v2.0
 
 ### Phase 14: v2.0 Web Admin Configuration UI
 **Goal**: Operators can view and edit `appsettings.Production.json` via a localhost-only web UI that validates against the authoritative schema and prompts for AppPool recycle on write
 **Depends on**: Phase 8 (authoritative schema), Phase 13 (secrets segregation — editor must know which keys are secret-managed vs. file-backed)
 **Parallel with**: None (sequenced after Phase 13)
 **Target release**: v2.0.0
-**Requirements**: TBD (will be created during `/gsd-discuss-phase 14`)
+**Requirements**: Admin-UI surface delivered in Phase 13 (loopback admin website); hosting modes delivered in Phase 14
 **Success Criteria** (what must be TRUE):
   1. Admin page is reachable only from `127.0.0.1` / `::1` — remote requests return 403
   2. UI renders fields from `appsettings.schema.json` (Phase 08), including types, defaults, and obsolete markers
@@ -158,7 +160,7 @@ Source: 21 GitHub issues (#19–#39) opened 2026-04-16. Must ship before v2.0 wo
   4. Save operation writes atomically (tmp file + rename) and triggers an AppPool recycle prompt
   5. Secret-managed keys (Phase 13 outputs) are shown as "managed externally" and not editable via the UI
   6. All writes emit a SIEM audit event (reuses Phase 09 AuditEvent infrastructure)
-**Plans**: TBD
+**Plans**: Executed via superpowers subagent-driven-development (not enumerated here) — ✅ shipped in v2.0
 
 ## Cross-Phase Dependencies
 
@@ -178,33 +180,35 @@ Source: 21 GitHub issues (#19–#39) opened 2026-04-16. Must ship before v2.0 wo
 
 ## Parallelism Map
 
-**v1.4.0 (active):**
-- Phases 7, 8, 9 can run in parallel once requirements are mapped (different surfaces: installer, config, security middleware)
-- Phase 10 sequences after 7+8+9 land (integrates their surfaces into /health, post-deploy check, CI)
+**v1.4.0 (shipped):**
+- Phases 7, 8, 9 ran in parallel (different surfaces: installer, config, security middleware)
+- Phase 10 sequenced after 7+8+9 landed (integrated their surfaces into /health, post-deploy check, CI)
 
-**v2.0.0 (queued):**
-- Sequential default: Phase 11 → Phase 12 → Phase 13 → Phase 14
-- Phases 12 and 13 could run in parallel once Phase 11 lands; coarse granularity keeps them sequential unless capacity allows
-- Phase 14 sequences after Phase 13 (needs secret-managed key list to render "managed externally" placeholders)
+**v2.0.0 (shipped):**
+- Executed sequentially: Phase 11 → Phase 12 → Phase 13 → Phase 14
+- Each phase shipped incrementally through the 2.0.0-alpha.1…alpha.8 chain; consolidated into a single `[2.0.0]` release and cut as GA v2.0.1 on 2026-06-01
 
 ## Progress
 
-| Phase | Milestone | Plans Complete | Status | Completed |
-|---|---|---|---|---|
-| 7. Installer & Deployment Fixes | v1.4.0 | 0/0 | Not started | — |
-| 8. Configuration Schema & Sync | v1.4.0 | 0/8 | Planned | — |
-| 9. Security Hardening | v1.4.0 | 0/0 | Not started | — |
-| 10. Operational Readiness | v1.4.0 | 1/4 | In Progress|  |
-| 11. v2.0 Multi-OS PoC | v2.0.0 | 0/0 | Queued | — |
-| 12. v2.0 Local Password DB | v2.0.0 | 0/0 | Queued | — |
-| 13. v2.0 Secure Config Storage | v2.0.0 | 0/0 | Queued | — |
+| Phase | Milestone | Status | Completed |
+|---|---|---|---|
+| 7. Installer & Deployment Fixes | v1.4.0 | ✅ Complete | 2026-04-16 |
+| 8. Configuration Schema & Sync | v1.4.0 | ✅ Complete | 2026-04 |
+| 9. Security Hardening | v1.4.0 | ✅ Complete | 2026-04 |
+| 10. Operational Readiness | v1.4.0 | ✅ Complete | 2026-04-20 |
+| 11. Cross-platform LDAP provider | v2.0.0 | ✅ Shipped | 2026-04-21 (alpha.1) |
+| 12. Local Password DB | v2.0.0 | ✅ Shipped | 2026-04 |
+| 13. Secure Config Storage + Admin UI | v2.0.0 | ✅ Shipped | 2026-04 |
+| 14. Pluggable Windows hosting modes | v2.0.0 | ✅ Shipped | 2026-04-24 |
+
+**Production release:** v2.0.1 (GA) published 2026-06-01.
 
 ## Coverage
 
-- v1.4.0 active requirements: **21** (STAB-001..021)
-- v2.0.0 queued requirements: **3** (V2-001, V2-002, V2-003)
+- v1.4.0 requirements: **21** (STAB-001..021) — all delivered ✓
+- v2.0.0 requirements: **3** (V2-001, V2-002, V2-003) — all delivered ✓
 - Mapped: **24/24** ✓
 - Orphans: **0**
 
 ---
-*Last updated: 2026-04-16 (Phase 8 planned: 8 plans across 5 waves covering STAB-007..012)*
+*Last updated: 2026-06-01 (v2.0.0 shipped; all phases 11–14 complete; GA cut as v2.0.1)*
