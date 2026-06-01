@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace PassReset.Tests.Windows.Web.Controllers;
 
@@ -161,6 +162,18 @@ public class HealthControllerTests : IDisposable
         Assert.NotNull(dto);
         Assert.Equal("unhealthy", dto!.Status);
         Assert.Equal("unhealthy", dto.Checks!.Smtp!.Status);
+    }
+
+    // ── Test 7 ─ HealthCheckSettings registered in DI ───────────────────────────
+    [Fact]
+    public void HealthCheckSettings_IsRegisteredInDi()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var opts = scope.ServiceProvider
+            .GetService<Microsoft.Extensions.Options.IOptions<PassReset.Web.Models.HealthCheckSettings>>();
+
+        Assert.NotNull(opts);
+        Assert.NotNull(opts!.Value);
     }
 
     // ── Factories ──────────────────────────────────────────────────────────────

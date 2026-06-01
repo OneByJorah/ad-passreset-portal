@@ -96,6 +96,11 @@ try
         .ValidateOnStart();
     builder.Services.AddSingleton<IValidateOptions<PasswordChangeOptions>, PasswordChangeOptionsValidator>();
 
+    builder.Services.AddOptions<HealthCheckSettings>()
+        .Bind(builder.Configuration.GetSection(nameof(HealthCheckSettings)))
+        .ValidateOnStart();
+    builder.Services.AddSingleton<IValidateOptions<HealthCheckSettings>, HealthCheckSettingsValidator>();
+
     builder.Services.AddOptions<AdminSettings>()
         .Bind(builder.Configuration.GetSection(nameof(AdminSettings)))
         .ValidateOnStart();
