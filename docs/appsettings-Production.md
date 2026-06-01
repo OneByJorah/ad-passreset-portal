@@ -355,6 +355,8 @@ A background service that emails users before their password expires. Scans memb
 
 Controls the UI and frontend behaviour.
 
+> See [Password Policy](Password-Policy.md) for what the `ShowAdPasswordPolicy` panel displays and the provider/FGPP limitations.
+
 ```json
 "ClientSettings": {
   "ApplicationTitle": "Change Account Password | Self-Service",
