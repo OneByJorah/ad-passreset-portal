@@ -568,3 +568,18 @@ Describe 'Install-PassReset: Resolve-HealthHostHeader' {
         Resolve-HealthHostHeader -BindingInformation $null -Fallback 'HOST01' | Should -Be 'HOST01'
     }
 }
+
+Describe 'Install-PassReset: Test-HealthResponseHealthy' {
+    It 'returns $true when status is healthy' {
+        Test-HealthResponseHealthy -HealthJson '{"status":"healthy","checks":{}}' | Should -BeTrue
+    }
+    It 'returns $false when status is degraded' {
+        Test-HealthResponseHealthy -HealthJson '{"status":"degraded","checks":{}}' | Should -BeFalse
+    }
+    It 'returns $false when status is unhealthy' {
+        Test-HealthResponseHealthy -HealthJson '{"status":"unhealthy","checks":{}}' | Should -BeFalse
+    }
+    It 'returns $false on unparseable body (fail closed)' {
+        Test-HealthResponseHealthy -HealthJson 'not json' | Should -BeFalse
+    }
+}

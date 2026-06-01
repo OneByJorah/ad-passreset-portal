@@ -274,6 +274,20 @@ function Resolve-HealthHostHeader {
     return $hostName
 }
 
+function Test-HealthResponseHealthy {
+    <#
+        STAB-019: a 200 is necessary but not sufficient - the /api/health aggregate
+        'status' must be 'healthy'. Unparseable bodies fail closed.
+    #>
+    param([string] $HealthJson)
+    try {
+        $obj = $HealthJson | ConvertFrom-Json -ErrorAction Stop
+        return ($obj.status -eq 'healthy')
+    } catch {
+        return $false
+    }
+}
+
 # STAB-016: validate that an HTTPS binding exists on the configured port. Pure function
 # (takes a binding collection) so Pester can exercise it without a live IIS site. Returns
 # a small object the caller uses to Write-Ok / Write-Warn (warn-not-block per D-13).
