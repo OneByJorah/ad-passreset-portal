@@ -29,21 +29,11 @@ public sealed class PasswordController : ControllerBase
     private readonly PasswordChangeOptions _passwordOptions;
     private readonly IHostEnvironment _hostEnvironment;
     private readonly ILogger<PasswordController> _logger;
+    private readonly HttpClient _recaptchaHttp;
 
     // Pre-compiled 5-char hex regex for pwned-check prefix validation.
     private static readonly Regex Sha1PrefixRegex =
         new("^[a-fA-F0-9]{5}$", RegexOptions.Compiled);
-
-    // Static HttpClient for reCAPTCHA v3 verification — avoids socket exhaustion.
-    // PooledConnectionLifetime ensures DNS changes are respected without restarting the process.
-    private static readonly HttpClient _recaptchaHttp = new(new SocketsHttpHandler
-    {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(10),
-    })
-    {
-        BaseAddress = new Uri("https://www.google.com/"),
-        Timeout     = TimeSpan.FromSeconds(10),
-    };
 
     public PasswordController(
         IPasswordChangeProvider provider,
@@ -55,6 +45,7 @@ public sealed class PasswordController : ControllerBase
         IPwnedPasswordChecker pwnedChecker,
         IOptions<PasswordChangeOptions> passwordOptions,
         IHostEnvironment hostEnvironment,
+        IHttpClientFactory httpClientFactory,
         ILogger<PasswordController> logger)
     {
         _provider           = provider;
@@ -67,6 +58,7 @@ public sealed class PasswordController : ControllerBase
         _passwordOptions    = passwordOptions.Value;
         _hostEnvironment    = hostEnvironment;
         _logger             = logger;
+        _recaptchaHttp      = httpClientFactory.CreateClient("recaptcha");
     }
 
     /// <summary>
