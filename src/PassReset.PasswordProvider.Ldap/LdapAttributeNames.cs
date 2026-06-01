@@ -22,4 +22,7 @@ internal static class LdapAttributeNames
     public const string ObjectClass          = "objectClass";
     public const string DisplayName          = "displayName";
     public const string Manager              = "manager";
+    public const string PwdProperties        = "pwdProperties";
+    public const string PwdHistoryLength     = "pwdHistoryLength";
+    public const string DefaultNamingContext = "defaultNamingContext";
 }
