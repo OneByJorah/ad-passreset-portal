@@ -214,6 +214,12 @@ function Resolve-DependencyAction {
     }
 }
 
+function Test-DismRebootPending {
+    <# STAB-006: DISM exit 3010 = success but a reboot is required to complete. #>
+    param([int[]] $ExitCodes)
+    return [bool]($ExitCodes | Where-Object { $_ -eq 3010 })
+}
+
 # STAB-016: validate that an HTTPS binding exists on the configured port. Pure function
 # (takes a binding collection) so Pester can exercise it without a live IIS site. Returns
 # a small object the caller uses to Write-Ok / Write-Warn (warn-not-block per D-13).

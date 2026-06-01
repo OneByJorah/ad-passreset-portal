@@ -446,3 +446,15 @@ Describe 'Install-PassReset: dependency control parameters' {
         $raw | Should -Match '\.PARAMETER SkipDependencyCheck'
     }
 }
+
+Describe 'Install-PassReset: Test-DismRebootPending' {
+    It 'returns $true on DISM exit 3010' {
+        Test-DismRebootPending -ExitCodes @(0, 3010, 0) | Should -BeTrue
+    }
+    It 'returns $false when all exits are 0' {
+        Test-DismRebootPending -ExitCodes @(0, 0) | Should -BeFalse
+    }
+    It 'returns $false for an empty set' {
+        Test-DismRebootPending -ExitCodes @() | Should -BeFalse
+    }
+}
