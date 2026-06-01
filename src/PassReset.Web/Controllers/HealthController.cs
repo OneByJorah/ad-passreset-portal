@@ -27,6 +27,7 @@ public sealed class HealthController : ControllerBase
     private readonly IExpiryServiceDiagnostics _expiryDiagnostics;
     private readonly ILockoutDiagnostics _lockoutDiagnostics;
     private readonly IAdConnectivityProbe _adProbe;
+    private readonly IOptions<HealthCheckSettings> _healthSettings;
     private readonly ILogger<HealthController> _logger;
 
     public HealthController(
@@ -37,6 +38,7 @@ public sealed class HealthController : ControllerBase
         IExpiryServiceDiagnostics expiryDiagnostics,
         ILockoutDiagnostics lockoutDiagnostics,
         IAdConnectivityProbe adProbe,
+        IOptions<HealthCheckSettings> healthSettings,
         ILogger<HealthController> logger)
     {
         _options            = options;
@@ -46,6 +48,7 @@ public sealed class HealthController : ControllerBase
         _expiryDiagnostics  = expiryDiagnostics;
         _lockoutDiagnostics = lockoutDiagnostics;
         _adProbe            = adProbe;
+        _healthSettings     = healthSettings;
         _logger             = logger;
     }
 
@@ -82,6 +85,9 @@ public sealed class HealthController : ControllerBase
 
     private async Task<(string status, long latencyMs, bool skipped)> CheckSmtpAsync()
     {
+        if (_healthSettings.Value.DisableSmtpConnectivityProbe)
+            return ("skipped", 0, true);
+
         var emailEnabled  = _emailNotif.Value.Enabled;
         var expiryEnabled = _expiryNotif.Value.Enabled;
         if (!emailEnabled && !expiryEnabled)

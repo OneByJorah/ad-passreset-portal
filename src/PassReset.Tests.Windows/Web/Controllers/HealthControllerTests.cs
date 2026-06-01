@@ -176,6 +176,23 @@ public class HealthControllerTests : IDisposable
         Assert.NotNull(opts!.Value);
     }
 
+    // ── Test 8 ─ SMTP probe disabled via config => skipped, aggregate healthy ----
+    [Fact]
+    public async Task Get_SmtpProbeDisabled_SkipsSmtpAndStaysHealthy()
+    {
+        using var factory = new SmtpProbeDisabledFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var response = await client.GetAsync("/api/health");
+        var dto = await response.Content.ReadFromJsonAsync<HealthResponseDto>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(dto);
+        Assert.Equal("skipped", dto!.Checks!.Smtp!.Status);
+        Assert.True(dto.Checks.Smtp.Skipped);
+        Assert.Equal("healthy", dto.Status);
+    }
+
     // ── Factories ──────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -299,6 +316,41 @@ public class HealthControllerTests : IDisposable
                     ["PasswordChangeOptions:UseAutomaticContext"]             = "false",
                     ["PasswordChangeOptions:LdapHostnames:0"]                 = "127.0.0.1",
                     ["PasswordChangeOptions:LdapPort"]                        = adPort,
+                });
+            });
+        }
+    }
+
+    /// <summary>
+    /// Email enabled AND SMTP pointed at an unreachable blackhole, BUT the SMTP probe
+    /// is disabled via HealthCheckSettings — so the endpoint must stay healthy/200.
+    /// </summary>
+    public sealed class SmtpProbeDisabledFactory : FakeAdFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            var adPort = FakeAdPort.ToString(CultureInfo.InvariantCulture);
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                  = "true",
+                    ["WebSettings:EnableHttpsRedirect"]               = "false",
+                    ["ClientSettings:MinimumDistance"]                = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]              = "false",
+                    ["EmailNotificationSettings:Enabled"]             = "true",
+                    ["PasswordExpiryNotificationSettings:Enabled"]    = "false",
+                    ["SiemSettings:Syslog:Enabled"]                   = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]               = "false",
+                    ["SmtpSettings:Host"]                             = "192.0.2.1",
+                    ["SmtpSettings:Port"]                             = "1",
+                    ["SmtpSettings:FromAddress"]                      = "passreset@test.invalid",
+                    ["HealthCheckSettings:DisableSmtpConnectivityProbe"] = "true",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"]  = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]     = "false",
+                    ["PasswordChangeOptions:LdapHostnames:0"]         = "127.0.0.1",
+                    ["PasswordChangeOptions:LdapPort"]                = adPort,
                 });
             });
         }
