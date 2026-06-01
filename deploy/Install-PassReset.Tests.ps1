@@ -629,3 +629,15 @@ Describe 'Install-PassReset: non-IIS post-deploy reporting' {
         $script:Src | Should -Match "(?s)HostingMode -eq 'Console'.*health"
     }
 }
+
+Describe 'Install-PassReset: STAB-019 regression guards' {
+    It 'a healthy 200 body is accepted (happy path preserved)' {
+        Test-HealthResponseHealthy -HealthJson '{"status":"healthy","checks":{"ad":{"status":"healthy"}}}' | Should -BeTrue
+    }
+    It 'host-header wildcard binding falls back to COMPUTERNAME (no behavior change for default installs)' {
+        Resolve-HealthHostHeader -BindingInformation '*:443:' -Fallback 'DEFAULT' | Should -Be 'DEFAULT'
+    }
+    It 'health block still wrapped by -SkipHealthCheck guard' {
+        (Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw) | Should -Match 'if \(-not \$SkipHealthCheck\)'
+    }
+}
