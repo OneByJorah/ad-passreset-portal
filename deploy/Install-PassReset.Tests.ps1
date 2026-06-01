@@ -482,3 +482,12 @@ Describe 'Install-PassReset: IIS prereq block wiring' {
     }
     It 'honors -SkipDependencyCheck' { $script:Src | Should -Match '\$SkipDependencyCheck' }
 }
+
+Describe 'Install-PassReset: .NET bundle block wiring' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    It 'uses Get-HostingBundleDiagnostic for the bundle decision' { $script:Src | Should -Match 'Get-HostingBundleDiagnostic' }
+    It 'honors -SkipDependencyCheck for the bundle check' {
+        # The bundle gate must reference SkipDependencyCheck.
+        $script:Src | Should -Match 'SkipDependencyCheck -and'
+    }
+}

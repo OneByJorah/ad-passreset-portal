@@ -1068,25 +1068,42 @@ $hostingBundle = Get-ItemProperty `
     -Path 'HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedhost' `
     -ErrorAction SilentlyContinue
 
-if (-not $hostingBundle) {
-    Write-Warn '.NET 10 Hosting Bundle is not installed.'
+# Set-StrictMode -Version Latest is active (top of script): guard the .Version access so a
+# $null $hostingBundle (registry key absent) does not throw on property dereference.
+$bundleVer  = if ($hostingBundle) { $hostingBundle.Version } else { $null }
+$bundleDiag = Get-HostingBundleDiagnostic -InstalledVersion $bundleVer
+if (-not $SkipDependencyCheck -and $bundleDiag) {
+    Write-Warn $bundleDiag
     Write-Host '  Required: ASP.NET Core 10.0 Runtime (Hosting Bundle)' -ForegroundColor Yellow
     Write-Host '  Download: https://dotnet.microsoft.com/download/dotnet/10.0' -ForegroundColor Yellow
-    Write-Host '  Choose "ASP.NET Core Runtime - Hosting Bundle" for Windows.' -ForegroundColor Yellow
-    Write-Host ''
-    Write-Host '  Re-run this installer after the Hosting Bundle is installed.' -ForegroundColor Yellow
-    Write-Host ''
-    exit 0
-}
 
-$installedRuntime = $hostingBundle.Version
-if (-not ($installedRuntime -match '^10\.')) {
-    Write-Warn ".NET 10 Hosting Bundle is required but found version $installedRuntime."
-    Write-Host '  Required: ASP.NET Core 10.0 Runtime (Hosting Bundle)' -ForegroundColor Yellow
-    Write-Host '  Download: https://dotnet.microsoft.com/download/dotnet/10.0' -ForegroundColor Yellow
-    Write-Host ''
-    exit 0
+    $action = Resolve-DependencyAction -InstallDependencies $InstallDependencies -Force $Force.IsPresent
+    if ($action -eq 'prompt') {
+        $consent = Read-Host '  Attempt automatic install via winget now? [Y/N]'
+        $action  = if ($consent -match '^[Yy]') { 'install' } else { 'abort' }
+    }
+    if ($action -eq 'install' -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Ok 'Installing .NET 10 Hosting Bundle via winget'
+        if ($PSCmdlet.ShouldProcess('.NET 10 Hosting Bundle', 'Install via winget')) {
+            Start-Process -FilePath winget -ArgumentList @(
+                'install','--id','Microsoft.DotNet.HostingBundle.10','-e',
+                '--accept-source-agreements','--accept-package-agreements') -Wait -NoNewWindow
+        }
+        # STAB-006: re-query the registry; only proceed if a 10.x bundle is now present.
+        $hostingBundle = Get-ItemProperty `
+            -Path 'HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedhost' `
+            -ErrorAction SilentlyContinue
+        $bundleVer  = if ($hostingBundle) { $hostingBundle.Version } else { $null }
+        $bundleDiag = Get-HostingBundleDiagnostic -InstalledVersion $bundleVer
+        if ($bundleDiag) {
+            Abort "$bundleDiag Re-run the installer after a successful Hosting Bundle install (a reboot may be required)."
+        }
+    } else {
+        Write-Host '  Re-run this installer after the Hosting Bundle is installed.' -ForegroundColor Yellow
+        exit 0
+    }
 }
+$installedRuntime = $bundleVer
 Write-Ok ".NET Hosting Bundle $installedRuntime detected"
 
 # Windows Event Log source (D-07 runtime half from plan 08-03).
