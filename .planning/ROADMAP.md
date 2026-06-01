@@ -1,6 +1,6 @@
 # PassReset — Roadmap
 
-**Milestone chain:** v1.2.3 ✅ → v1.3.0 ✅ → v1.3.1 ✅ → v1.3.2 ✅ → v1.4.0 ✅ → v2.0.0 ✅ (GA cut as v2.0.1)
+**Milestone chain:** v1.2.3 ✅ → v1.3.0 ✅ → v1.3.1 ✅ → v1.3.2 ✅ → v1.4.0 🟡 (5/21 STAB verified, 16 partial) → v2.0.0 ✅ (GA cut as v2.0.1)
 **Granularity:** coarse
 **Parallelization:** enabled
 **Created:** 2026-04-14
@@ -12,17 +12,17 @@
 - ✅ **v1.3.0 Test Foundation + UX Features** (2026-04-15) — QA-001 + FEAT-001..004. See [`milestones/v1.3.0-ROADMAP.md`](milestones/v1.3.0-ROADMAP.md).
 - ✅ **v1.3.1 AD Diagnostics** (2026-04-15) — BUG-004. See [`milestones/v1.3.1-ROADMAP.md`](milestones/v1.3.1-ROADMAP.md).
 - ✅ **v1.3.2 Diagnostics Code Review Fixes** (2026-04-16) — WR-01..03 rollup on top of v1.3.1. See [`milestones/v1.3.2-ROADMAP.md`](milestones/v1.3.2-ROADMAP.md).
-- ✅ **v1.4.0 Stabilization** (2026-04) — STAB-001..021 across Phases 7–10 (installer, config schema/sync, security hardening, operational readiness).
+- 🟡 **v1.4.0 Stabilization** (2026-04) — STAB-001..021 across Phases 7–10. Per the 2026-06-01 issue-vs-code audit, 5 are verified complete (gh#22/#23/#25/#35/#37 closed) and 16 are partial (issues open). See `docs/superpowers/issue-vs-code-audit-2026-06-01.md`.
 - ✅ **v2.0.0 Platform Evolution** (2026-06-01, GA cut as **v2.0.1**) — Phases 11–14: cross-platform LDAP provider, local offline password policy, loopback admin UI + encrypted secrets, pluggable Windows hosting modes.
 
-## v1.4.0 (Stabilization) — ✅ Complete
+## v1.4.0 (Stabilization) — 🟡 Mostly delivered (5/21 verified, 16 partial)
 
-Source: 21 GitHub issues (#19–#39) opened 2026-04-16.
+Source: 21 GitHub issues (#19–#39) opened 2026-04-16. Status per the 2026-06-01 issue-vs-code audit (`docs/superpowers/issue-vs-code-audit-2026-06-01.md`). `[x]` = verified complete & closed; `[~]` = partial, issue open.
 
-- [x] **Phase 7: Installer & Deployment Fixes** — STAB-001..006 (gh#19, #20, #21, #23, #36, #39) ✓ 2026-04-16
-- [x] **Phase 8: Configuration Schema & Sync** — STAB-007..012 (gh#22, #24, #25, #26, #27, #37) ✓
-- [x] **Phase 9: Security Hardening** — STAB-013..017 (gh#28, #29, #30, #32, #33) ✓
-- [x] **Phase 10: Operational Readiness** — STAB-018..021 (gh#31, #34, #35, #38) ✓ 2026-04-20
+- [~] **Phase 7: Installer & Deployment Fixes** — STAB-001..006: STAB-003 ✅ (gh#23); STAB-001/002/004/005/006 partial (gh#19/#20/#36/#39/#21)
+- [~] **Phase 8: Configuration Schema & Sync** — STAB-007..012: STAB-007/009/012 ✅ (gh#22/#25/#37); STAB-008/010/011 partial (gh#27/#24/#26)
+- [~] **Phase 9: Security Hardening** — STAB-013..017: all 5 partial (gh#28/#29/#30/#32/#33)
+- [~] **Phase 10: Operational Readiness** — STAB-018..021: STAB-020 ✅ (gh#35); STAB-018/019/021 partial (gh#31/#34/#38)
 
 ## v2.0.0 (Platform evolution) — ✅ Shipped (GA = v2.0.1)
 
@@ -192,10 +192,10 @@ Source: 21 GitHub issues (#19–#39) opened 2026-04-16.
 
 | Phase | Milestone | Status | Completed |
 |---|---|---|---|
-| 7. Installer & Deployment Fixes | v1.4.0 | ✅ Complete | 2026-04-16 |
-| 8. Configuration Schema & Sync | v1.4.0 | ✅ Complete | 2026-04 |
-| 9. Security Hardening | v1.4.0 | ✅ Complete | 2026-04 |
-| 10. Operational Readiness | v1.4.0 | ✅ Complete | 2026-04-20 |
+| 7. Installer & Deployment Fixes | v1.4.0 | 🟡 1/6 verified, 5 partial | 2026-04-16 |
+| 8. Configuration Schema & Sync | v1.4.0 | 🟡 3/6 verified, 3 partial | 2026-04 |
+| 9. Security Hardening | v1.4.0 | 🟡 0/5 verified, 5 partial | 2026-04 |
+| 10. Operational Readiness | v1.4.0 | 🟡 1/4 verified, 3 partial | 2026-04-20 |
 | 11. Cross-platform LDAP provider | v2.0.0 | ✅ Shipped | 2026-04-21 (alpha.1) |
 | 12. Local Password DB | v2.0.0 | ✅ Shipped | 2026-04 |
 | 13. Secure Config Storage + Admin UI | v2.0.0 | ✅ Shipped | 2026-04 |
@@ -205,9 +205,9 @@ Source: 21 GitHub issues (#19–#39) opened 2026-04-16.
 
 ## Coverage
 
-- v1.4.0 requirements: **21** (STAB-001..021) — all delivered ✓
-- v2.0.0 requirements: **3** (V2-001, V2-002, V2-003) — all delivered ✓
-- Mapped: **24/24** ✓
+- v1.4.0 requirements: **21** (STAB-001..021) — 5 verified complete, 16 partial (2026-06-01 audit)
+- v2.0.0 requirements: **4** (V2-001..004) — all delivered ✓ (shipped in v2.0.1)
+- Mapped: **25/25** ✓
 - Orphans: **0**
 
 ---

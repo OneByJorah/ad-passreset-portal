@@ -43,7 +43,7 @@ Next: No active milestone. Next work starts a new milestone from the backlog.
 | v1.3.0 | 02, 03 | ✅ Shipped 2026-04-15 (archived) |
 | v1.3.1 | 07 (legacy) | ✅ Shipped 2026-04-15 (archived) |
 | v1.3.2 | 07 (code review fix rollup) | ✅ Shipped 2026-04-16 (archived) |
-| v1.4.0 | 7 ✓, 8 ✓, 9 ✓, 10 ✓ | ✅ Code-complete |
+| v1.4.0 | 7, 8, 9, 10 | 🟡 Mostly delivered — 5/21 STAB verified complete (gh#22/#23/#25/#35/#37 closed), 16 partial (issues open). See audit below. |
 | v2.0.0 | 11 ✓, 12 ✓, 13 ✓, 14 ✓ | ✅ Shipped — alpha chain consolidated, GA cut as v2.0.1 (2026-06-01) |
 
 > Note: legacy phase 07 numbering belongs to the archived v1.3.1/v1.3.2 milestones. The v1.4.0 chain restarts active phase numbering at 7; archived directories are not affected.
@@ -51,7 +51,7 @@ Next: No active milestone. Next work starts a new milestone from the backlog.
 ## Performance Metrics
 
 - Phases complete: 8/8 active (01, 02, 03, legacy 07, 11, 12, 13, 14) + v1.4.0 phases 7–10
-- Requirements delivered: BUG-001..004, QA-001, FEAT-001..004, STAB-001..021, V2-001..003 — all mapped requirements delivered
+- Requirements delivered: BUG-001..004, QA-001, FEAT-001..004 (v1.2.3/v1.3.x) ✅; V2-001..004 (v2.0) ✅; STAB-001..021 (v1.4.0) = 5 verified complete + 16 partial (per 2026-06-01 audit)
 - Releases shipped: v1.2.3, v1.3.0, v1.3.1, v1.3.2, v1.4.x, v2.0.0-alpha.1…alpha.8, **v2.0.1 (GA)**
 
 ## Accumulated Context
@@ -74,6 +74,10 @@ Next: No active milestone. Next work starts a new milestone from the backlog.
 ### Blockers
 
 - None
+
+### Open follow-ups (2026-06-01 issue-vs-code audit)
+
+A verification of all 21 v1.4.0 GitHub issues against current code found 5 fully delivered (closed) and **16 partial** (kept open, gap commented on each). Notable real gaps: structured `AuditEvent` is built but never wired into production (gh#30); residual account-enumeration oracle via lockout codes (gh#28); LDAP provider shows wrong AD policy values (gh#38); port-80 alt-port re-bind bug (gh#19); E_ACCESSDENIED catch can't catch AccountManagement's exception (gh#36). Full detail: `docs/superpowers/issue-vs-code-audit-2026-06-01.md`.
 
 ### Notes
 

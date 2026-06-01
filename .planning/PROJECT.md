@@ -66,14 +66,14 @@ A reliable, secure, self-service password reset portal that fits into corporate 
 - [x] **FEAT-004** HIBP breach status indicator on new-password blur, respecting `FailOpenOnPwnedCheckUnavailable`
 - [x] **QA-001** Test foundation — xUnit (backend) + Vitest/RTL (frontend), CI gates block on test failures
 
-### Delivered (v1.4.0 — Stabilization, pre-v2.0 hardening)
+### v1.4.0 — Stabilization (pre-v2.0 hardening) — 🟡 Mostly delivered
 
-Triage of 21 GitHub issues opened 2026-04-16 against v1.3.2. See REQUIREMENTS.md STAB-001..021 for full list. All shipped in the v1.4.x line.
+Triage of 21 GitHub issues opened 2026-04-16 against v1.3.2. See REQUIREMENTS.md STAB-001..021. A 2026-06-01 issue-vs-code audit (`docs/superpowers/issue-vs-code-audit-2026-06-01.md`) found **5 verified complete** (gh#22/#23/#25/#35/#37 closed) and **16 partial** (issues kept open). Phase-level summary below; per-requirement status in REQUIREMENTS.md.
 
-- [x] **Phase 7** — Installer & Deployment Fixes (STAB-001..006): port 80 conflict, same-version prompt, AppPool identity, double-change crash, broken Uninstall script, dependency detection **✓ 2026-04-16**
-- [x] **Phase 8** — Configuration Schema & Sync (STAB-007..012): JSON comments, schema manifest, pre-flight validation, config sync on upgrade, drift-check fix **✓**
-- [x] **Phase 9** — Security Hardening (STAB-013..017): account enumeration, rate-limit + reCAPTCHA tests, audit events, HTTPS/HSTS enforcement, env-var secrets **✓**
-- [x] **Phase 10** — Operational Readiness (STAB-018..021): /health dependency checks, post-deploy verification, CI security checks, AD policy display **✓ 2026-04-20**
+- [~] **Phase 7** — Installer & Deployment Fixes (STAB-001..006): STAB-003 verified (AppPool identity); STAB-001/002/004/005/006 partial (alt-port re-bind bug, reconfigure banner, E_ACCESSDENIED catch, no CI parse-gate, .NET bundle not auto-installed).
+- [~] **Phase 8** — Configuration Schema & Sync (STAB-007..012): STAB-007/009/012 verified (pure-JSON template, validators, drift check); STAB-008/010/011 partial (schema omits v2.0 sections; sync IIS-only; no dry-run).
+- [~] **Phase 9** — Security Hardening (STAB-013..017): all 5 partial — notably structured `AuditEvent` is built but never wired into production (STAB-015), and a residual lockout-based enumeration oracle remains (STAB-013).
+- [~] **Phase 10** — Operational Readiness (STAB-018..021): STAB-020 verified (CI security gate); STAB-018/019/021 partial (/health 503 when expiry enabled, post-deploy IIS-only, LDAP shows wrong policy).
 
 ### Delivered (v2.0.0 — Platform evolution, GA = v2.0.1, 2026-06-01)
 
