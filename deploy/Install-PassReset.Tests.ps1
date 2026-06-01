@@ -491,3 +491,10 @@ Describe 'Install-PassReset: .NET bundle block wiring' {
         $script:Src | Should -Match 'SkipDependencyCheck -and'
     }
 }
+
+Describe 'Docs: STAB-006 prerequisite flags documented' {
+    BeforeAll { $script:Iis = Get-Content "$PSScriptRoot/../docs/IIS-Setup.md" -Raw }
+    It 'documents -InstallDependencies' { $script:Iis | Should -Match '-InstallDependencies' }
+    It 'documents -SkipDependencyCheck' { $script:Iis | Should -Match '-SkipDependencyCheck' }
+    It 'documents reboot-pending behavior' { $script:Iis | Should -Match '(?i)reboot' }
+}

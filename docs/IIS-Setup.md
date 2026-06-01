@@ -72,7 +72,20 @@ If you decline the prompt, the installer prints the exact `dism /online /enable-
 
 Use `-Force` for unattended / CI installs — DISM enable runs without prompting.
 
-The **.NET 10 Hosting Bundle** is **not** auto-installed. If it is missing, the installer prints the Microsoft download URL and exits 0 cleanly — see [Step 2](#step-2--install-the-net-10-hosting-bundle) below, then re-run the installer.
+If the **.NET 10 Hosting Bundle** is missing the installer offers to install it via **winget** (when available). On a host without winget it prints the Microsoft download URL and exits 0 cleanly — see [Step 2](#step-2--install-the-net-10-hosting-bundle) below, then re-run the installer.
+
+### Unattended dependency handling (flags)
+
+| Flag | Effect |
+|------|--------|
+| `-InstallDependencies prompt` | (default) interactive Y/N for missing IIS features and the .NET Hosting Bundle |
+| `-InstallDependencies yes` | auto-install missing IIS features (DISM) and the Hosting Bundle (winget) without prompting |
+| `-InstallDependencies no` | abort cleanly (exit 0) when any prerequisite is missing |
+| `-SkipDependencyCheck` | skip all prerequisite detection (use only on pre-validated hosts) |
+
+`-Force` implies `-InstallDependencies yes`. After installing IIS features the installer
+**re-validates** them; if DISM reports a pending reboot (exit 3010) the installer aborts
+**before** creating the site/app pool — reboot and re-run.
 
 ### Manual fallback (declined Y/N prompt, pre-Windows-Server-2019, or air-gapped builds)
 
@@ -387,6 +400,12 @@ To prevent this on a fresh install, re-run the installer — it now retains the 
 
 - Set `"EnableHttpsRedirect": false` temporarily to diagnose.
 - Ensure the HTTPS binding has a valid, trusted certificate.
+
+### Reboot pending after DISM
+
+If the installer aborts with "IIS feature installation requires a system reboot
+(DISM exit 3010)", reboot the server and re-run the installer. This is intentional:
+creating the site before the roles finish installing would start the worker without IIS roles present.
 
 ---
 
