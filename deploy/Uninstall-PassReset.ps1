@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Removes a PassReset installation from IIS, the Windows Service manager, and the file system.

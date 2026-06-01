@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Installs PassReset on IIS (Windows Server 2019 / 2022 / 2025, IIS 10).
 
