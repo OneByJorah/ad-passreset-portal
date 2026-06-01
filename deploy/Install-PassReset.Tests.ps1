@@ -415,3 +415,18 @@ Describe 'Install-PassReset: STAB-001 HTTPS-only removal guard intact' {
         $src | Should -Match 'if \(\$CertThumbprint -and \$HttpPort -le 0\)'
     }
 }
+
+Describe 'Install-PassReset: Resolve-DependencyAction' {
+    It "returns 'install' when -InstallDependencies yes" {
+        Resolve-DependencyAction -InstallDependencies 'yes' -Force $false | Should -Be 'install'
+    }
+    It "returns 'abort' when -InstallDependencies no" {
+        Resolve-DependencyAction -InstallDependencies 'no' -Force $false | Should -Be 'abort'
+    }
+    It "returns 'install' under -Force even when InstallDependencies is prompt (CI safety)" {
+        Resolve-DependencyAction -InstallDependencies 'prompt' -Force $true | Should -Be 'install'
+    }
+    It "returns 'prompt' for interactive default" {
+        Resolve-DependencyAction -InstallDependencies 'prompt' -Force $false | Should -Be 'prompt'
+    }
+}

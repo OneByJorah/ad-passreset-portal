@@ -182,6 +182,24 @@ function Restore-StoppedForeignSites {
 
 function Abort       { param([string]$Msg) Restore-StoppedForeignSites; Write-Host "`n[ERR] $Msg`n" -ForegroundColor Red; exit 1 }
 
+function Resolve-DependencyAction {
+    <#
+        STAB-006: decide how to handle a missing prerequisite without prompting in
+        non-interactive contexts. -Force implies auto-install (safe CI behavior).
+    #>
+    param(
+        [ValidateSet('prompt','yes','no')]
+        [string] $InstallDependencies = 'prompt',
+        [bool]   $Force
+    )
+    if ($Force)                          { return 'install' }
+    switch ($InstallDependencies) {
+        'yes'    { return 'install' }
+        'no'     { return 'abort' }
+        default  { return 'prompt' }
+    }
+}
+
 # STAB-016: validate that an HTTPS binding exists on the configured port. Pure function
 # (takes a binding collection) so Pester can exercise it without a live IIS site. Returns
 # a small object the caller uses to Write-Ok / Write-Warn (warn-not-block per D-13).
