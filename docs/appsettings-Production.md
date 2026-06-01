@@ -30,6 +30,26 @@ pwsh -Command "Test-Json -Path 'C:\inetpub\PassReset\appsettings.Production.json
 
 ---
 
+## Config sync on upgrade (`-ConfigSync`)
+
+On upgrade, `Install-PassReset.ps1` reconciles your live `appsettings.Production.json`
+against the bundled `appsettings.schema.json`:
+
+| Mode    | Behavior |
+|---------|----------|
+| `Merge` | Adds missing keys from schema defaults; reports obsolete keys (never removed). Existing values are never changed. |
+| `Review`| Prompts before adding each missing key and before removing each obsolete key. |
+| `Diff`  | Dry-run — prints what *would* change, writes nothing, creates no backup. |
+| `None`  | Skips sync. |
+
+**Default:** fresh install → `None`; unattended/`-Force` upgrade → `Merge`; interactive upgrade → prompt.
+
+Before any write, the installer creates `appsettings.Production.json_<timestamp>.bak`
+and a durable `appsettings.Production_sync-<timestamp>.log` next to your config.
+Preview first with `-ConfigSync Diff`.
+
+---
+
 ## Startup validation
 
 Phase 8 introduced fail-fast runtime validation. Every options class is registered via

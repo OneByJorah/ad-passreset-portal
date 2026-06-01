@@ -105,3 +105,14 @@ Describe 'AdminSettings + Kestrel schema parity' {
         } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
     }
 }
+
+Describe 'Operator docs mention config sync modes' {
+    It 'docs/appsettings-Production.md documents Diff/Merge/Review and backups' {
+        $doc = Join-Path (Split-Path -Parent $PSScriptRoot) 'docs/appsettings-Production.md'
+        Test-Path $doc | Should -BeTrue
+        $text = Get-Content $doc -Raw
+        $text | Should -Match '(?i)-ConfigSync'
+        $text | Should -Match '(?i)Diff'
+        $text | Should -Match '(?i)backup'
+    }
+}
