@@ -288,6 +288,24 @@ function Test-HealthResponseHealthy {
     }
 }
 
+function Get-HealthFailureDiagnostics {
+    <# STAB-019: actionable multi-line pointer block printed on health-check failure. #>
+    param(
+        [string] $BaseUrl,
+        [string] $LogsPath
+    )
+    return @"
+Post-deploy health check failed for $BaseUrl.
+
+Troubleshooting:
+  1. Logs: inspect $LogsPath for ASP.NET Core startup and request errors.
+  2. Event Viewer -> Windows Logs -> Application, Source 'PassReset' (ID 1001) for config/startup failures.
+  3. App pool: open IIS Manager and confirm the PassReset app pool is Started (not stopped on a crash).
+  4. Binding: confirm the site's host header and port match $BaseUrl (mismatch -> connection refused / 404).
+  5. Common causes: wrong app-pool identity, occupied port, HTTPS cert not bound, appsettings.Production.json schema errors.
+"@
+}
+
 # STAB-016: validate that an HTTPS binding exists on the configured port. Pure function
 # (takes a binding collection) so Pester can exercise it without a live IIS site. Returns
 # a small object the caller uses to Write-Ok / Write-Warn (warn-not-block per D-13).

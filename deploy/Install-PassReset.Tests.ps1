@@ -583,3 +583,13 @@ Describe 'Install-PassReset: Test-HealthResponseHealthy' {
         Test-HealthResponseHealthy -HealthJson 'not json' | Should -BeFalse
     }
 }
+
+Describe 'Install-PassReset: Get-HealthFailureDiagnostics' {
+    BeforeAll {
+        $script:Diag = Get-HealthFailureDiagnostics -BaseUrl 'https://host01:443' -LogsPath 'C:\inetpub\logs\PassReset'
+    }
+    It 'references the logs path'     { $script:Diag | Should -Match 'C:\\inetpub\\logs\\PassReset' }
+    It 'references Event Viewer'      { $script:Diag | Should -Match '(?i)Event Viewer' }
+    It 'references the base URL'      { $script:Diag | Should -Match 'https://host01:443' }
+    It 'mentions binding/port checks' { $script:Diag | Should -Match '(?i)binding' }
+}
