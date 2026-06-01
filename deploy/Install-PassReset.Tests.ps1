@@ -48,3 +48,20 @@ Describe 'Install-PassReset: Test-ServiceModePreflight' {
         }
     }
 }
+
+Describe 'Get-SchemaKeyManifest: handles scalar/nullable leaves under StrictMode (regression)' {
+    BeforeAll {
+        $script:RealSchema = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/PassReset.Web/appsettings.schema.json'
+    }
+    It 'builds a manifest from the real schema without throwing' {
+        $schema = Get-Content $script:RealSchema -Raw | ConvertFrom-Json
+        { Get-SchemaKeyManifest -Schema $schema } | Should -Not -Throw
+    }
+    It 'emits leaf entries for nullable ["string","null"] properties (e.g. LocalPolicy.BannedWordsPath)' {
+        $schema   = Get-Content $script:RealSchema -Raw | ConvertFrom-Json
+        $manifest = Get-SchemaKeyManifest -Schema $schema
+        $paths    = @($manifest | ForEach-Object { $_.Path })
+        $paths | Should -Contain 'PasswordChangeOptions:LocalPolicy:BannedWordsPath'
+        $paths | Should -Contain 'AdminSettings:LoopbackPort'
+    }
+}

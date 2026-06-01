@@ -166,12 +166,16 @@ function Get-SchemaKeyManifest {
         [string] $Prefix = ''
     )
     $entries = @()
-    if ($null -eq $Schema -or $null -eq $Schema.properties) { return $entries }
+    if ($null -eq $Schema) { return $entries }
+    # Membership-guard the .properties access so Set-StrictMode -Version Latest does not throw
+    # on object nodes that declare no 'properties' (e.g. { "type":"object", "additionalProperties":true }).
+    if ($Schema.PSObject.Properties.Name -notcontains 'properties' -or $null -eq $Schema.properties) { return $entries }
     foreach ($prop in $Schema.properties.PSObject.Properties) {
         $name = $prop.Name
         $node = $prop.Value
         $path = if ($Prefix) { "${Prefix}:${name}" } else { $name }
-        $isObj = ($node.type -eq 'object') -or ($null -ne $node.properties)
+        $hasProperties = $node.PSObject.Properties.Name -contains 'properties'
+        $isObj = ($node.type -eq 'object') -or $hasProperties
         if ($isObj) {
             # Recurse into nested object (don't emit a leaf for the object itself)
             $entries += Get-SchemaKeyManifest -Schema $node -Prefix $path
