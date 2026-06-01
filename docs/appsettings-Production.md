@@ -561,6 +561,8 @@ When the built-in password generator writes a generated password to the clipboar
 
 Forwards security events to a SIEM via RFC 5424 syslog and/or email alerts. Both channels are opt-in; all keys are optional.
 
+> See [Audit Events](Audit-Events.md) for the full event-type and field reference.
+
 ```json
 "SiemSettings": {
   "Syslog": {
