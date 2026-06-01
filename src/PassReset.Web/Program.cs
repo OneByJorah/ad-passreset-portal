@@ -292,8 +292,17 @@ try
                 sp.GetRequiredService<IOptions<PasswordChangeOptions>>(),
                 sp.GetRequiredService<ILogger<LockoutPasswordChangeProvider>>()));
         builder.Services.AddSingleton<IEmailService, NoOpEmailService>();
-        // Expiry service is never wired in debug mode — diagnostics report "not-enabled".
-        builder.Services.AddSingleton<IExpiryServiceDiagnostics>(new NullExpiryServiceDiagnostics());
+        if (expirySettings.Enabled)
+        {
+            builder.Services.AddSingleton<PasswordExpiryNotificationService>();
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<PasswordExpiryNotificationService>());
+            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(sp =>
+                sp.GetRequiredService<PasswordExpiryNotificationService>());
+        }
+        else
+        {
+            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(new NullExpiryServiceDiagnostics());
+        }
         // Health probe — LDAP TCP probe is cross-platform; returns NotConfigured when LdapHostnames empty.
         builder.Services.AddSingleton<IAdConnectivityProbe, LdapTcpProbe>();
     }
