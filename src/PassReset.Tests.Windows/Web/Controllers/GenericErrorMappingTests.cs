@@ -369,4 +369,31 @@ public class GenericErrorMappingTests : IDisposable
         Assert.Equal(ApiErrorCode.ApproachingLockout, result.Errors[0].ErrorCode);
         Assert.Contains(SiemEventType.ApproachingLockout, factory.Recorder.Events);
     }
+
+    /// <summary>
+    /// STAB-013 gap closure: the FOURTH invalid-credential attempt is blocked by the
+    /// decorator BEFORE contacting AD and returns PortalLockout. Like ApproachingLockout,
+    /// this is per-account throttling state, not a directory-enumeration vector, so it
+    /// must NOT be collapsed to Generic in Production. SIEM records PortalLockout.
+    /// </summary>
+    [Fact]
+    public async Task Production_PortalLockout_WirePreservesCode()
+    {
+        using var factory = new ProductionEnvFactoryWithEnabledLockout();
+        using var client  = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        HttpResponseMessage response = null!;
+        for (int i = 0; i < 4; i++)
+            response = await client.PostAsJsonAsync("/api/password", MakeRequest("invalidCredentials"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.NotNull(result);
+        Assert.Single(result!.Errors);
+        Assert.Equal(ApiErrorCode.PortalLockout, result.Errors[0].ErrorCode);
+        Assert.Contains(SiemEventType.PortalLockout, factory.Recorder.Events);
+    }
 }
