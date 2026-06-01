@@ -33,4 +33,25 @@ public class ChangePasswordHResultTests
         var code = PasswordChangeProvider.ClassifyChangePasswordHResult(unchecked((int)0x80070057)); // E_INVALIDARG
         Assert.Null(code);
     }
+
+    [Fact]
+    public void MapUnauthorizedAccess_AccessDenied_ThrowsPasswordTooRecentlyChanged()
+    {
+        var ex = new UnauthorizedAccessException("denied")
+        { HResult = unchecked((int)0x80070005) };
+
+        var thrown = Assert.Throws<ApiErrorException>(() =>
+            PasswordChangeProvider.MapUnauthorizedAccess(ex));
+        Assert.Equal(ApiErrorCode.PasswordTooRecentlyChanged, thrown.ErrorCode);
+    }
+
+    [Fact]
+    public void MapUnauthorizedAccess_PermissionDenied_Rethrows()
+    {
+        var ex = new UnauthorizedAccessException("genuine permission failure")
+        { HResult = unchecked((int)0x80070057) };
+
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            PasswordChangeProvider.MapUnauthorizedAccess(ex));
+    }
 }

@@ -491,6 +491,22 @@ public sealed class PasswordChangeProvider : IPasswordChangeProvider
             : null;
     }
 
+    /// <summary>
+    /// STAB-004: classifies an <see cref="UnauthorizedAccessException"/> wrapping E_ACCESSDENIED.
+    /// Throws <see cref="ApiErrorException"/>(PasswordTooRecentlyChanged) for policy-violation
+    /// HResults; rethrows the original for genuine permission failures so the outer catch logs
+    /// the permission diagnostic. Static + logger-free so it is unit-testable.
+    /// </summary>
+    internal static void MapUnauthorizedAccess(UnauthorizedAccessException ex)
+    {
+        var classified = ClassifyChangePasswordHResult(ex.HResult);
+        if (classified is not null)
+            throw new ApiErrorException(
+                "Your password was changed too recently. Please wait before trying again.",
+                classified.Value);
+        throw ex;
+    }
+
     private void ChangePasswordInternal(string currentPassword, string newPassword, AuthenticablePrincipal userPrincipal)
     {
         try
@@ -539,6 +555,19 @@ public sealed class PasswordChangeProvider : IPasswordChangeProvider
                 comEx.HResult, userPrincipal.Name);
             userPrincipal.SetPassword(newPassword);
             _logger.LogDebug("Password set via SetPassword fallback for user {User}", userPrincipal.Name);
+        }
+        catch (UnauthorizedAccessException uaEx)
+        {
+            // STAB-004: AccountManagement can surface E_ACCESSDENIED as UnauthorizedAccessException
+            // (not COMException). Map policy HResults to PasswordTooRecentlyChanged with the same
+            // diagnostic chain as the COMException path; rethrow genuine permission failures.
+            ExceptionChainLogger.LogExceptionChain(_logger, uaEx,
+                "ChangePassword raised UnauthorizedAccessException for {User} HRESULT=0x{Hex:X8}; " +
+                "treating E_ACCESSDENIED as minimum-password-age violation, otherwise a permission issue.",
+                userPrincipal.SamAccountName,
+                uaEx.HResult);
+
+            MapUnauthorizedAccess(uaEx);
         }
     }
 
