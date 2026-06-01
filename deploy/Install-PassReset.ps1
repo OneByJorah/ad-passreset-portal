@@ -1566,6 +1566,48 @@ if ($CertThumbprint) {
     Write-Ok "PassReset reachable at https://${hostHeader}:${HttpsPort}/ (HTTPS binding configured)"
 }
 
+# STAB-016: validate binding/redirect consistency and emit a structured, secret-free
+# final binding configuration block (warn-not-block per D-13).
+$allBindings = @(Get-IISSiteBinding -Name $SiteName -ErrorAction SilentlyContinue) |
+    ForEach-Object {
+        [pscustomobject]@{ protocol = $_.Protocol; bindingInformation = $_.BindingInformation }
+    }
+$httpsCheck = Test-HttpsBinding -Bindings $allBindings -HttpsPort $HttpsPort
+
+Write-Host "`n*** FINAL BINDING CONFIGURATION ***" -ForegroundColor Cyan
+foreach ($b in $allBindings) {
+    $port = ($b.bindingInformation -split ':')[1]
+    if ($b.protocol -eq 'https') {
+        $thumbShort = if ($CertThumbprint) { $CertThumbprint.Substring(0, [Math]::Min(8, $CertThumbprint.Length)) } else { '(none)' }
+        Write-Ok "Binding: protocol=https, port=$port, host=* (cert thumbprint: $thumbShort...)"
+    } else {
+        Write-Ok "Binding: protocol=http,  port=$port, host=* (HTTP->HTTPS redirect target: https://${hostHeader}:${HttpsPort})"
+    }
+}
+
+if ($httpsCheck.HasHttps) {
+    Write-Ok "HTTPS binding verified on ${SiteName}:${HttpsPort}"
+} else {
+    Write-Warn "HTTPS binding missing on ${SiteName}:${HttpsPort} — UseHttpsRedirection() will redirect to a non-existent binding"
+}
+
+# Recommend EnableHttpsRedirect when a cert is bound (best-effort read of live config).
+if ($CertThumbprint) {
+    $prodCfgPath = Join-Path $PhysicalPath 'appsettings.Production.json'
+    $redirectOn = $null
+    if (Test-Path $prodCfgPath) {
+        try {
+            $prodCfg = Get-Content $prodCfgPath -Raw | ConvertFrom-Json
+            $redirectOn = $prodCfg.WebSettings.EnableHttpsRedirect
+        } catch { $redirectOn = $null }
+    }
+    if ($redirectOn -ne $true) {
+        Write-Warn "Certificate bound but WebSettings:EnableHttpsRedirect is not 'true' in appsettings.Production.json — set it to enable HTTP->HTTPS redirect and HSTS (will be applied during config sync if missing)."
+    } else {
+        Write-Ok "EnableHttpsRedirect=true — HTTP->HTTPS redirect and HSTS active"
+    }
+}
+
 # ----- STAB-019: post-deploy verification -----
 # Verify the freshly deployed app responds on /api/health + /api/password before
 # declaring success. Retries 10x at 2s intervals (~20s worst case, matches AppPool
