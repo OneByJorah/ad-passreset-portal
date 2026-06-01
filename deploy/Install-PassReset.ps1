@@ -220,6 +220,18 @@ function Test-DismRebootPending {
     return [bool]($ExitCodes | Where-Object { $_ -eq 3010 })
 }
 
+function Get-HostingBundleDiagnostic {
+    <# STAB-006: structured "what is missing" message for the .NET Hosting Bundle. #>
+    param([string] $InstalledVersion)
+    if (-not $InstalledVersion) {
+        return 'Missing: ASP.NET Core 10.0 Hosting Bundle (not detected in HKLM registry: SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedhost).'
+    }
+    if ($InstalledVersion -notmatch '^10\.') {
+        return "Found incompatible .NET Hosting Bundle: $InstalledVersion - required: 10.0.0 or later."
+    }
+    return $null
+}
+
 # STAB-016: validate that an HTTPS binding exists on the configured port. Pure function
 # (takes a binding collection) so Pester can exercise it without a live IIS site. Returns
 # a small object the caller uses to Write-Ok / Write-Warn (warn-not-block per D-13).

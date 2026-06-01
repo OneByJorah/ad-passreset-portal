@@ -458,3 +458,17 @@ Describe 'Install-PassReset: Test-DismRebootPending' {
         Test-DismRebootPending -ExitCodes @() | Should -BeFalse
     }
 }
+
+Describe 'Install-PassReset: Get-HostingBundleDiagnostic' {
+    It 'reports not-detected when version is null' {
+        Get-HostingBundleDiagnostic -InstalledVersion $null | Should -Match 'not detected in HKLM registry'
+    }
+    It 'reports incompatible version when not 10.x' {
+        $msg = Get-HostingBundleDiagnostic -InstalledVersion '8.0.11'
+        $msg | Should -Match '8\.0\.11'
+        $msg | Should -Match '10\.0\.0 or later'
+    }
+    It 'returns empty when version is 10.x' {
+        Get-HostingBundleDiagnostic -InstalledVersion '10.0.3' | Should -BeNullOrEmpty
+    }
+}
