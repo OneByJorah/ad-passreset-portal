@@ -498,3 +498,61 @@ Describe 'Docs: STAB-006 prerequisite flags documented' {
     It 'documents -SkipDependencyCheck' { $script:Iis | Should -Match '-SkipDependencyCheck' }
     It 'documents reboot-pending behavior' { $script:Iis | Should -Match '(?i)reboot' }
 }
+
+Describe 'Install-PassReset: Get-DoneBannerMessage' {
+    It 'reports reconfigured when IsReconfigure is set (even with a backup)' {
+        Get-DoneBannerMessage -BackupPath 'C:\inetpub\PassReset_backup_x' -IsReconfigure $true |
+            Should -Be 'PassReset reconfigured successfully.'
+    }
+    It 'reports upgraded when a backup exists and not reconfigure' {
+        Get-DoneBannerMessage -BackupPath 'C:\inetpub\PassReset_backup_x' -IsReconfigure $false |
+            Should -Be 'PassReset upgraded successfully.'
+    }
+    It 'reports installed on a fresh install (no backup)' {
+        Get-DoneBannerMessage -BackupPath $null -IsReconfigure $false |
+            Should -Be 'PassReset installed successfully.'
+    }
+    It 'reports installed when no backup even if reconfigure flag somehow set' {
+        Get-DoneBannerMessage -BackupPath $null -IsReconfigure $true |
+            Should -Be 'PassReset installed successfully.'
+    }
+}
+
+Describe 'Install-PassReset: Done banner wiring' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    It 'Done block calls Get-DoneBannerMessage' {
+        $script:Src | Should -Match 'Get-DoneBannerMessage -BackupPath \$backupPath -IsReconfigure \$isReconfigure'
+    }
+    It 'no longer prints an unconditional upgraded banner inside a bare if ($backupPath)' {
+        $script:Src | Should -Not -Match "Write-Host '  PassReset upgraded successfully\.'"
+    }
+}
+
+Describe 'Install-PassReset: -Reconfigure parameter' {
+    BeforeAll {
+        $t = $null; $e = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PSScriptRoot/Install-PassReset.ps1", [ref]$t, [ref]$e)
+        $script:ParamNames = $ast.ParamBlock.Parameters.Name.VariablePath.UserPath
+    }
+    It 'declares a -Reconfigure switch parameter' {
+        $script:ParamNames | Should -Contain 'Reconfigure'
+    }
+    It 'help text documents -Reconfigure' {
+        (Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw) | Should -Match '\.PARAMETER Reconfigure'
+    }
+}
+
+Describe 'Docs: reconfigure parameter is real and documented' {
+    It 'IIS-Setup.md documents reconfigure re-runs' {
+        (Get-Content "$PSScriptRoot/../docs/IIS-Setup.md" -Raw) | Should -Match '(?i)reconfigure'
+    }
+    It 'appsettings-Production.md -Reconfigure references match a real param' {
+        $t = $null; $e = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PSScriptRoot/Install-PassReset.ps1", [ref]$t, [ref]$e)
+        $names = $ast.ParamBlock.Parameters.Name.VariablePath.UserPath
+        $docMentions = (Get-Content "$PSScriptRoot/../docs/appsettings-Production.md" -Raw) -match '-Reconfigure'
+        if ($docMentions) { $names | Should -Contain 'Reconfigure' }
+    }
+}

@@ -269,6 +269,10 @@ pwsh -File .\deploy\Install-PassReset.ps1 `
 
 # Upgrading an existing installation (unattended — skip confirmation prompt)
 .\deploy\Install-PassReset.ps1 -Force -CertThumbprint "PASTE_THUMBPRINT_HERE"
+
+# Re-configure an existing install (re-apply binding/config without mirroring files)
+# Same-version re-runs auto-detect reconfigure mode; -Reconfigure forces it explicitly:
+.\deploy\Install-PassReset.ps1 -Reconfigure -Force -CertThumbprint "PASTE_THUMBPRINT_HERE"
 ```
 
 The installer:
@@ -281,6 +285,8 @@ The installer:
 - Stores secrets as IIS app pool environment variables (existing values are never overwritten)
 
 **Upgrading:** when an existing PassReset site is detected the installer displays the installed and incoming version numbers, prompts for confirmation, and creates a dated backup of the current deployment (e.g. `C:\inetpub\PassReset_backup_20260327-1430\`) before overwriting. Pass `-Force` to skip the confirmation for unattended deployments.
+
+**Reconfiguring:** re-running the installer with the *same* version already installed is treated as a **reconfigure** — the file mirror is skipped (your existing publish folder is preserved) while the app-pool, binding, and config logic re-run. The final banner reads "PassReset reconfigured successfully." rather than "upgraded". Pass `-Reconfigure` to force this mode explicitly (e.g. to re-apply configuration after editing) even when the incoming version differs.
 
 ---
 

@@ -72,6 +72,11 @@
     Skip the interactive upgrade confirmation prompt when an existing installation is detected.
     Use this for unattended / CI deployments.
 
+.PARAMETER Reconfigure
+    Force reconfigure mode: re-run app-pool / binding / config logic without mirroring
+    files, even when the incoming version differs. Same-version re-runs auto-detect
+    reconfigure; this switch makes it explicit (e.g. to re-apply config after editing).
+
 .PARAMETER InstallDependencies
     Controls prerequisite auto-install: 'prompt' (default, interactive Y/N),
     'yes' (auto-install missing IIS features and .NET Hosting Bundle), or 'no'
@@ -143,6 +148,9 @@ param(
     [string] $ConfigSync = '',   # empty -> resolved post-upgrade-detection: prompt if interactive, 'Merge' if -Force, 'None' if fresh install
 
     [switch] $Force,
+
+    # STAB-002: explicit reconfigure trigger (same-version re-runs auto-detect this).
+    [switch] $Reconfigure,
 
     # STAB-019: bypass post-deploy /api/health + /api/password verification (air-gapped hosts only).
     # Default $false — verification runs by default, including under -Force (D-06/D-07).
@@ -230,6 +238,22 @@ function Get-HostingBundleDiagnostic {
         return "Found incompatible .NET Hosting Bundle: $InstalledVersion - required: 10.0.0 or later."
     }
     return $null
+}
+
+function Get-DoneBannerMessage {
+    <#
+        STAB-002: choose the Done-banner verb. A backup is created for ANY existing
+        install, so $BackupPath alone cannot distinguish upgrade from reconfigure.
+        Reconfigure (same incoming version) only counts when an existing install
+        was present (i.e. a backup exists).
+    #>
+    param(
+        [string]  $BackupPath,
+        [bool]    $IsReconfigure
+    )
+    if (-not $BackupPath)  { return 'PassReset installed successfully.' }
+    if ($IsReconfigure)    { return 'PassReset reconfigured successfully.' }
+    return 'PassReset upgraded successfully.'
 }
 
 # STAB-016: validate that an HTTPS binding exists on the configured port. Pure function
@@ -1184,6 +1208,12 @@ $isDowngrade   = $false
 $isReconfigure = $false
 
 if ($siteExists) {
+    # STAB-002: an explicit -Reconfigure forces reconfigure mode on an existing install
+    # (e.g. to re-apply config after editing), even when the incoming version differs.
+    # Only meaningful when a deployment already exists — a fresh install ignores it so
+    # the file mirror still runs.
+    if ($Reconfigure) { $isReconfigure = $true }
+
     $deployedExe     = Join-Path $PhysicalPath 'PassReset.Web.exe'
     $currentVersion  = if (Test-Path $deployedExe) {
                            (Get-Item $deployedExe).VersionInfo.FileVersion -replace '\.0$'
@@ -2074,15 +2104,17 @@ if (Test-Path $prodConfig) {
 
 Write-Host ''
 Write-Host '======================================================' -ForegroundColor Cyan
-if ($backupPath) {
-    Write-Host '  PassReset upgraded successfully.' -ForegroundColor Green
+$bannerMessage = Get-DoneBannerMessage -BackupPath $backupPath -IsReconfigure $isReconfigure
+Write-Host "  $bannerMessage" -ForegroundColor Green
+if ($backupPath -and -not $isReconfigure) {
     Write-Host ''
     Write-Host '  Backup of previous installation:' -ForegroundColor Yellow
     Write-Host "    $backupPath"                    -ForegroundColor Yellow
     Write-Host '  To roll back manually: stop the site, robocopy the backup'
     Write-Host '  folder back to $PhysicalPath, then start the site.'
-} else {
-    Write-Host '  PassReset installed successfully.' -ForegroundColor Green
+} elseif ($backupPath -and $isReconfigure) {
+    Write-Host ''
+    Write-Host '  Reconfigure mode: files were not mirrored; existing deployment preserved.' -ForegroundColor Yellow
 }
 Write-Host ''
 Write-Host '  Next steps:' -ForegroundColor Yellow
