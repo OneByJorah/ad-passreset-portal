@@ -344,3 +344,16 @@ Describe 'STAB-018 documentation' {
         $doc | Should -Match 'ExpiryServiceGracePeriodSeconds'
     }
 }
+
+Describe 'PowerShell scripts: parse cleanly' {
+    It 'every deploy/*.ps1 has zero parser errors' {
+        $deploy = Split-Path $PSScriptRoot -Parent
+        $bad = @()
+        Get-ChildItem (Join-Path $deploy 'deploy') -Filter '*.ps1' | ForEach-Object {
+            $t = $null; $e = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$t, [ref]$e) | Out-Null
+            if ($e.Count -gt 0) { $bad += "$($_.Name): $($e.Count) error(s)" }
+        }
+        $bad -join '; ' | Should -BeNullOrEmpty
+    }
+}
