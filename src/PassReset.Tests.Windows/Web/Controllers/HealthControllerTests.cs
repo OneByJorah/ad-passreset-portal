@@ -25,6 +25,8 @@ public class HealthControllerTests : IDisposable
 {
     private const string SmtpPasswordSentinel = "TEST_SECRET_DO_NOT_LEAK";
     private const string RecaptchaPrivateKeySentinel = "TEST_RECAPTCHA_PRIVATE_DO_NOT_LEAK";
+    private const string LdapPasswordSentinel = "TEST_LDAP_DO_NOT_LEAK";
+    private const string ServiceAccountPasswordSentinel = "TEST_SVCACCT_DO_NOT_LEAK";
 
     private readonly DebugFactory _factory = new();
 
@@ -127,6 +129,8 @@ public class HealthControllerTests : IDisposable
 
         Assert.DoesNotContain(SmtpPasswordSentinel, body);
         Assert.DoesNotContain(RecaptchaPrivateKeySentinel, body);
+        Assert.DoesNotContain(LdapPasswordSentinel, body);
+        Assert.DoesNotContain(ServiceAccountPasswordSentinel, body);
         Assert.DoesNotContain("\"password\"", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("privateKey", body, StringComparison.OrdinalIgnoreCase);
     }
@@ -242,6 +246,8 @@ public class HealthControllerTests : IDisposable
                     ["PasswordChangeOptions:UseAutomaticContext"]             = "false",
                     ["PasswordChangeOptions:LdapHostnames:0"]                 = "127.0.0.1",
                     ["PasswordChangeOptions:LdapPort"]                        = adPort,
+                    ["PasswordChangeOptions:LdapPassword"]                    = LdapPasswordSentinel,
+                    ["PasswordChangeOptions:ServiceAccountPassword"]          = ServiceAccountPasswordSentinel,
                 });
             });
         }
