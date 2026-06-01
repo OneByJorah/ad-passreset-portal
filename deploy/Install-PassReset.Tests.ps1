@@ -619,3 +619,13 @@ Describe 'Install-PassReset: health block validation wiring' {
         $script:Src | Should -Match 'if \(-not \$SkipHealthCheck\)'
     }
 }
+
+Describe 'Install-PassReset: non-IIS post-deploy reporting' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    It 'Service mode references the health endpoint for verification' {
+        $script:Src | Should -Match "(?s)HostingMode -eq 'Service'.*api/health"
+    }
+    It 'Console mode prints a health verification note' {
+        $script:Src | Should -Match "(?s)HostingMode -eq 'Console'.*health"
+    }
+}

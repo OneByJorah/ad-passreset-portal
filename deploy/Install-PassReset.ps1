@@ -2094,10 +2094,37 @@ elseif ($HostingMode -eq 'Service') {
         -BinaryPath (Join-Path $PhysicalPath 'PassReset.Web.exe') `
         -ServiceAccount $ServiceAccount `
         -ServicePassword $ServicePassword
+
+    # STAB-019 #34: verify the self-hosted service answers /api/health (healthy aggregate).
+    # Service mode binds Kestrel HTTPS on IPAddress.Any:443 (Program.cs, gated on the
+    # required cert), so $HttpsPort (default 443) is the listener port. There is no HTTP
+    # listener in Service mode; the http branch is a defensive fallback only.
+    $svcBase = if ($CertThumbprint) { "https://${env:COMPUTERNAME}:${HttpsPort}" } else { "http://${env:COMPUTERNAME}:${selectedHttpPort}" }
+    if (-not $SkipHealthCheck) {
+        Write-Step "Verifying service at $svcBase/api/health (up to 10 x 2s)"
+        $svcOk = $false
+        for ($i = 1; $i -le 10 -and -not $svcOk; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+                $r = Invoke-WebRequest -Uri "$svcBase/api/health" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+                if ($r.StatusCode -eq 200 -and (Test-HealthResponseHealthy -HealthJson $r.Content)) { $svcOk = $true }
+            } catch { Write-Warning ("Attempt {0}/10: {1}" -f $i, $_.Exception.Message) }
+        }
+        if (-not $svcOk) {
+            Write-Host (Get-HealthFailureDiagnostics -BaseUrl $svcBase -LogsPath (Join-Path $PhysicalPath 'logs')) -ForegroundColor Yellow
+            Write-Error 'Service-mode post-deploy health check failed.'
+            exit 1
+        }
+        Write-Ok "Service healthy at $svcBase/api/health"
+    } else {
+        Write-Step 'Skipping service health check (-SkipHealthCheck)'
+    }
 }
 elseif ($HostingMode -eq 'Console') {
     Write-Host "Console mode: files copied to $PhysicalPath." -ForegroundColor Cyan
     Write-Host "To start manually: dotnet '$PhysicalPath\PassReset.Web.dll'" -ForegroundColor Cyan
+    Write-Host "Console mode: app is not auto-started, so no health check runs." -ForegroundColor Cyan
+    Write-Host "After starting it manually, verify: Invoke-WebRequest https://localhost:${HttpsPort}/api/health" -ForegroundColor Cyan
 }
 # ─── end IIS hosting block ───
 
