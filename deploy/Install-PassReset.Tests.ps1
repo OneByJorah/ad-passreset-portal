@@ -309,3 +309,26 @@ Describe 'STAB-018 / #34 post-deploy health contract' {
         $script:InstallerText | Should -Match 'exit 1'
     }
 }
+
+Describe 'STAB-018 HealthCheckSettings config surface' {
+    BeforeAll {
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        $script:Template = Join-Path $repoRoot 'src/PassReset.Web/appsettings.Production.template.json'
+        $script:Schema   = Join-Path $repoRoot 'src/PassReset.Web/appsettings.schema.json'
+    }
+
+    It 'template includes a HealthCheckSettings block with all four keys' {
+        $json = Get-Content -Raw -Path $script:Template | ConvertFrom-Json
+        $json.HealthCheckSettings | Should -Not -BeNullOrEmpty
+        $json.HealthCheckSettings.DisableSmtpConnectivityProbe    | Should -BeOfType [bool]
+        $json.HealthCheckSettings.DisableExpiryServiceCheck       | Should -BeOfType [bool]
+        $json.HealthCheckSettings.DisableAdConnectivityProbe      | Should -BeOfType [bool]
+        $json.HealthCheckSettings.ExpiryServiceGracePeriodSeconds | Should -Be 600
+    }
+
+    It 'schema declares HealthCheckSettings and remains valid JSON' {
+        $schemaText = Get-Content -Raw -Path $script:Schema
+        $schemaText | Should -Match 'HealthCheckSettings'
+        { $schemaText | ConvertFrom-Json } | Should -Not -Throw
+    }
+}
