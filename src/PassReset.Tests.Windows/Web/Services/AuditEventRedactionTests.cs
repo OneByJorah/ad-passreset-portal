@@ -43,4 +43,10 @@ public class AuditEventRedactionTests
             expected.OrderBy(n => n, StringComparer.Ordinal).ToArray(),
             actual);
     }
+
+    [Fact]
+    public void SiemEventType_HasPasswordChangeAttemptStarted()
+    {
+        Assert.True(Enum.IsDefined(typeof(SiemEventType), "PasswordChangeAttemptStarted"));
+    }
 }

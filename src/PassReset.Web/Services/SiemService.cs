@@ -26,6 +26,7 @@ internal sealed class SiemService : ISiemService, IDisposable
         [SiemEventType.ChangeNotPermitted] = 4, // Warning
         [SiemEventType.ValidationFailed]   = 5, // Notice
         [SiemEventType.Generic]            = 3, // Error
+        [SiemEventType.PasswordChangeAttemptStarted] = 6, // Informational
     };
 
     private readonly SiemSettings _settings;

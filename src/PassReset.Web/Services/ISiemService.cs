@@ -34,6 +34,9 @@ public enum SiemEventType
 
     /// <summary>Unexpected server-side error (may indicate AD unreachability).</summary>
     Generic,
+
+    /// <summary>A password-change attempt has entered the controller (correlation anchor).</summary>
+    PasswordChangeAttemptStarted,
 }
 
 /// <summary>
