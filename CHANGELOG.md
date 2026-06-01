@@ -12,6 +12,17 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.0.1] — 2026-06-01
+
+Release-pipeline hardening. No application code changes — the shipped app is identical to 2.0.0. This patch exists because the 2.0.0 tag's release run failed on two pre-existing CI defects (the release artifact was never published), and the `v2.0.0` tag is immutable.
+
+### Fixed
+
+- **Flaky frontend test under CI timing.** `PasswordForm.test.tsx`'s unfielded-error case used a single-shot fetch mock that the debounced HIBP breach check (`useHibpCheck`) could consume before submit, causing the error alert to never render and the assertion to time out. Routed the submit response explicitly by URL (matching the already-hardened sibling tests) so incidental fetches can't steal it. *(test)*
+- **`npm audit` security gate exited non-zero on a passing result.** `npm audit --json` returns a non-zero exit code whenever *any* advisory exists (including moderate/low ones the gate does not block); the leaked exit code failed the CI step even though no high/critical advisory was present. The gate now resets the exit code after the audit call and exits explicitly on success. The dotnet audit gate was made symmetric. *(ci)*
+
+---
+
 ## [2.0.0] — 2026-06-01
 
 Major release. Adds a cross-platform LDAP provider, an offline/local password policy, a loopback admin UI with encrypted secret storage, and pluggable Windows hosting modes (IIS / Service / Console) — plus a self-signed-certificate fallback for the installer. **Existing IIS deployments upgrade with no config changes; all new features are opt-in.**
