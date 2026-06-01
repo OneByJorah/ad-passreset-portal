@@ -380,3 +380,38 @@ Describe 'editorconfig: ps1 encoding policy' {
         $ec | Should -Match 'charset = utf-8'
     }
 }
+
+Describe 'Install-PassReset: STAB-001 HTTP redirect binding uses resolved port' {
+    BeforeAll {
+        $scriptPath = "$PSScriptRoot/Install-PassReset.ps1"
+        $tokens = $null; $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            $scriptPath, [ref]$tokens, [ref]$errs)
+        # Isolate the HTTP-binding creation statements: the New-IISSiteBinding call
+        # for protocol http that retains the redirect binding.
+        $httpBindingCalls = $ast.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.CommandAst] -and
+            $n.GetCommandName() -eq 'New-IISSiteBinding' -and
+            $n.Extent.Text -match '-Protocol http\b'
+        }, $true)
+        $script:HttpBindingText = ($httpBindingCalls | ForEach-Object { $_.Extent.Text }) -join "`n"
+    }
+
+    It 'creates the retained HTTP binding on $selectedHttpPort' {
+        # Accept both $selectedHttpPort and ${selectedHttpPort} (brace-delimited) forms.
+        $script:HttpBindingText | Should -Match '\$\{?selectedHttpPort\}?'
+    }
+
+    It 'does not bind the original $HttpPort param when creating the retained HTTP binding' {
+        # $HttpPort or ${HttpPort}, but NOT $selectedHttpPort (negative lookbehind on "selected").
+        $script:HttpBindingText | Should -Not -Match '\$\{?HttpPort\}?'
+    }
+}
+
+Describe 'Install-PassReset: STAB-001 HTTPS-only removal guard intact' {
+    It 'keeps the -HttpPort 0 removal branch guarded by $HttpPort -le 0' {
+        $src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw
+        $src | Should -Match 'if \(\$CertThumbprint -and \$HttpPort -le 0\)'
+    }
+}

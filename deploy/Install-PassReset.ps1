@@ -1530,15 +1530,17 @@ if ($CertThumbprint -and $HttpPort -le 0) {
         Write-Ok 'Removed HTTP binding (HTTPS-only mode: -HttpPort 0)'
     }
 } elseif ($CertThumbprint) {
-    # Ensure the HTTP binding exists on the configured port so ASP.NET Core
+    # Ensure the HTTP binding exists on the site's *resolved* port so ASP.NET Core
     # UseHttpsRedirection() can receive and redirect plain-HTTP requests.
+    # STAB-001: must be $selectedHttpPort (alternate port chosen on a port-80 conflict),
+    # NOT the original $HttpPort param — otherwise we re-bind an occupied port 80.
     $existingHttp = @(Get-IISSiteBinding -Name $SiteName -Protocol http -ErrorAction SilentlyContinue) |
-        Where-Object { $_.BindingInformation -match ":${HttpPort}:" }
+        Where-Object { $_.BindingInformation -match ":${selectedHttpPort}:" }
     if (-not $existingHttp) {
-        New-IISSiteBinding -Name $SiteName -BindingInformation "*:${HttpPort}:" -Protocol http | Out-Null
-        Write-Ok "HTTP :$HttpPort binding retained for HTTP→HTTPS redirect"
+        New-IISSiteBinding -Name $SiteName -BindingInformation "*:${selectedHttpPort}:" -Protocol http | Out-Null
+        Write-Ok "HTTP :$selectedHttpPort binding retained for HTTP→HTTPS redirect"
     } else {
-        Write-Ok "HTTP :$HttpPort binding present (HTTP→HTTPS redirect active)"
+        Write-Ok "HTTP :$selectedHttpPort binding present (HTTP→HTTPS redirect active)"
     }
 }
 
