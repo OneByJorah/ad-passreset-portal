@@ -83,7 +83,12 @@ jobs:
         working-directory: src/PassReset.Web/ClientApp
         shell: pwsh
         run: |
+          # `npm audit` exits non-zero whenever ANY advisory exists (exit code =
+          # vuln count), including the moderate/low ones this gate does not block.
+          # In a pwsh step that leaked $LASTEXITCODE fails the whole step even when
+          # our gate passes, so reset it and make the pass/fail decision ourselves.
           $raw    = (npm audit --json 2>&1 | Out-String)
+          $global:LASTEXITCODE = 0
           $result = $raw | ConvertFrom-Json
           $allowPath = "${{ github.workspace }}/deploy/security-allowlist.json"
           $allowlist = (Get-Content $allowPath -Raw | ConvertFrom-Json).advisories
@@ -119,6 +124,7 @@ jobs:
               exit 1
           }
           Write-Host "npm audit: no unfixed high/critical advisories"
+          exit 0
 
       - name: dotnet audit (High+Critical gate)
         shell: pwsh
@@ -150,6 +156,7 @@ jobs:
               exit 1
           }
           Write-Host "dotnet audit: no unfixed High/Critical advisories"
+          exit 0
 
       - name: Post audit summary
         if: always()

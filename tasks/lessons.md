@@ -2,6 +2,81 @@
 
 Track corrections and mistake patterns. Review at session start.
 
+---
+
+## 2026-06-01 — Local "green" ≠ CI "green": run the exact CI command, watch the run
+
+**Observed in:** Promoting 2.0.0-alpha.8 → 2.0.0. I verified `npm test` (plain
+Vitest) locally and tagged v2.0.0. CI's `tests` job runs `npm run test:coverage`
+(Vitest **with coverage**) and its `security-audit` job runs a pwsh `npm audit`
+gate — neither of which I'd run locally. The release pipeline failed *after* the
+tag push: a flaky `PasswordForm` test timed out, and the npm-audit gate exited 1.
+
+**Root causes (two, both pre-existing latent defects exposed by this release):**
+1. `PasswordForm.test.tsx` still used `mockFetchOnce` (resolves once, then rejects).
+   The debounced HIBP call from `useHibpCheck` steals the single mock under CI
+   timing → submit fetch rejects → alert never renders → `findByText` times out.
+   Fix: route via `mockFetchByUrl` with a safe default — the pattern sibling tests
+   already adopted (commits e32ca13, 75baf38).
+2. `tests.yml` npm-audit gate: `npm audit --json` exits non-zero whenever ANY
+   advisory exists (exit = vuln count). With no explicit `exit 0` on the success
+   path, the leaked `$LASTEXITCODE` from a *moderate* advisory failed the step even
+   though the gate logic passed. Latent since written; a new moderate dev advisory
+   (brace-expansion) tripped it. Fix: reset `$LASTEXITCODE` + explicit `exit 0`.
+
+**How to apply next time:**
+- Before tagging a release, run the EXACT commands CI runs, not their cousins:
+  `npm run test:coverage` (not `npm test`), and the audit gates. The CI `tests.yml`
+  step list is the source of truth for what "green" means.
+- After pushing a release tag, ALWAYS `gh run watch` the release run to completion
+  and confirm conclusion=success before claiming the release shipped. A tag push is
+  not a release — a published GitHub Release is.
+- A `waitFor`/`findBy` timeout on a test that passes locally = flaky timing, not a
+  logic break. Trace whether an incidental fetch (HIBP debounce) is stealing the
+  mock before suspecting your own diff.
+
+---
+
+## 2026-04-22 — Stop asking "continue?" mid-loop after user commits to a cadence
+
+**Observed in:** Phase 13 Admin UI subagent-driven execution.
+
+**Pattern:** User agreed (decision "C") to keep the current dispatching cadence:
+implementer → brief result → next task, escalating only on real issues. I still
+prompted "continue?" / "want me to continue?" between tasks 14, 15, 16, and 17 —
+three unnecessary confirmation gates across four small tasks. User had to say
+"continue" multiple times in a row to unblock me. This burns the user's time and
+breaks the value proposition of autonomous subagent execution.
+
+**Root cause:** Defaulting to "safe checkpoint" behavior even after the user has
+explicitly approved an autonomous cadence. Pattern-matching on task-number
+boundaries ("this feels like a milestone") instead of on actual-decision signals
+(test failure, plan gap, security-sensitive change, architectural fork).
+
+**Rules for me:**
+- Once the user approves a cadence ("continue through", "C", "go ahead", "same
+  rhythm"), **that approval covers the rest of the current batch** unless a
+  real escalation trigger fires. Do not re-prompt.
+- **Real escalation triggers (stop and ask):**
+  1. Test/build failure an implementer can't resolve via its own retry.
+  2. Plan gap that requires multi-task amendment (like Tests → Tests.Windows move).
+  3. Design fork with two defensible options and no plan guidance.
+  4. Security-sensitive default or behavior change (e.g., new public endpoint,
+     new default-on feature, credential handling).
+  5. User explicitly said "pause after X" or "check in every N tasks".
+- **NOT escalation triggers:** entering a new task phase (pages vs services vs
+  middleware), reaching a round number (task 10, 15, 20), completing a
+  sub-milestone. Just say "Task N: DONE, commit SHA, moving to Task N+1" and go.
+- End-of-turn summary: one sentence naming what was done + what's next. Not
+  "want me to continue?".
+- When in doubt: the user can always interrupt. Ask-by-default is the wrong bias.
+
+**Prevention signal:** If about to write "Want me to…" / "Shall I…" / "Before
+Task N+1…" mid-loop, check: did the user agree to cadence? If yes, delete the
+question and ship the next dispatch.
+
+---
+
 > **Note (2026-04-21):** The GSD Toolkit was retired from this repo on 2026-04-21. Lessons below that reference `gsd-executor`, `/gsd-*` commands, or specific GSD plan workflows are preserved verbatim because they document real incidents and the rules they produced still apply (transposed to superpowers skills where the shape is the same — e.g. "gsd-executor subagent stops" generalizes to "any subagent stops").
 
 ---

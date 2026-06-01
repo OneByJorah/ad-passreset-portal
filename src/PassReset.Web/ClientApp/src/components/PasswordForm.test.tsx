@@ -146,9 +146,16 @@ describe('PasswordForm', () => {
   });
 
   it('surfaces a general error alert when server returns unfielded error', async () => {
-    mockFetchOnce({
-      errors: [{ errorCode: ApiErrorCode.LdapProblem }],
-    });
+    // See sibling test comment — route submit explicitly so HIBP pre-call
+    // (debounced from useHibpCheck on new-password entry) can't steal the mock.
+    mockFetchByUrl(
+      {
+        '/api/password': {
+          body: { errors: [{ errorCode: ApiErrorCode.LdapProblem }] },
+        },
+      },
+      { default: { body: '', init: { status: 200 } } },
+    );
     const user = userEvent.setup();
     const { onSuccess } = renderForm();
 
