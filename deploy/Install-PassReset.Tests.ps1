@@ -75,3 +75,32 @@ Describe 'Get-SchemaKeyManifest: tolerates nodes without an explicit type (Stric
         @($m | ForEach-Object { $_.Path }) | Should -Contain 'Mode'
     }
 }
+
+Describe 'Sync-AppSettingsAgainstSchema: core invariants (regression guard)' {
+    BeforeAll {
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        $script:RealSchema = Join-Path $repoRoot 'src/PassReset.Web/appsettings.schema.json'
+    }
+    BeforeEach {
+        $script:cfg = Join-Path ([IO.Path]::GetTempPath()) "sync-$(New-Guid).json"
+    }
+    AfterEach {
+        Get-ChildItem ([IO.Path]::GetTempPath()) -Filter 'sync-*' -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'adds a missing key from its schema default (Merge mode)' {
+        '{ "PasswordChangeOptions": { "UseAutomaticContext": true } }' | Set-Content $script:cfg -Encoding UTF8
+        Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Merge'
+        $after = Get-Content $script:cfg -Raw | ConvertFrom-Json
+        $after.PasswordChangeOptions.PortalLockoutThreshold | Should -Be 3
+    }
+
+    It 'never overwrites an existing non-default value (Merge mode)' {
+        '{ "PasswordChangeOptions": { "UseAutomaticContext": true, "PortalLockoutThreshold": 99 } }' |
+            Set-Content $script:cfg -Encoding UTF8
+        Sync-AppSettingsAgainstSchema -SchemaPath $script:RealSchema -ConfigPath $script:cfg -Mode 'Merge'
+        $after = Get-Content $script:cfg -Raw | ConvertFrom-Json
+        $after.PasswordChangeOptions.PortalLockoutThreshold | Should -Be 99
+    }
+}
