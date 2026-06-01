@@ -1,8 +1,10 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using PassReset.Common;
@@ -128,6 +130,72 @@ public class RateLimitAndRecaptchaTests
         }
     }
 
+    /// <summary>
+    /// STAB-014: scriptable HttpMessageHandler so reCAPTCHA verification can be driven to
+    /// any siteverify outcome (low score, HTTP 500, network throw) without hitting Google.
+    /// </summary>
+    private sealed class StubRecaptchaHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+        public StubRecaptchaHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
+            => _responder = responder;
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(_responder(request));
+    }
+
+    /// <summary>
+    /// reCAPTCHA enabled, with the named "recaptcha" HttpClient's primary handler swapped
+    /// for a scripted stub. FailOpenOnUnavailable defaults to the supplied value.
+    /// </summary>
+    private sealed class StubbedRecaptchaFactory : WebApplicationFactory<Program>
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+        private readonly bool _failOpen;
+        public StubbedRecaptchaFactory(
+            Func<HttpRequestMessage, HttpResponseMessage> responder, bool failOpen)
+        {
+            _responder = responder;
+            _failOpen  = failOpen;
+        }
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                   = "true",
+                    ["WebSettings:EnableHttpsRedirect"]                = "false",
+                    ["ClientSettings:MinimumDistance"]                 = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]               = "true",
+                    ["ClientSettings:Recaptcha:SiteKey"]               = "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI",
+                    ["ClientSettings:Recaptcha:PrivateKey"]            = "test-private-key",
+                    ["ClientSettings:Recaptcha:ScoreThreshold"]        = "0.5",
+                    ["ClientSettings:Recaptcha:FailOpenOnUnavailable"] = _failOpen ? "true" : "false",
+                    ["EmailNotificationSettings:Enabled"]              = "false",
+                    ["PasswordExpiryNotificationSettings:Enabled"]     = "false",
+                    ["SiemSettings:Syslog:Enabled"]                    = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]                = "false",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"]   = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]      = "true",
+                });
+            });
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddHttpClient("recaptcha", c =>
+                {
+                    c.BaseAddress = new Uri("https://www.google.com/");
+                    c.Timeout = TimeSpan.FromSeconds(10);
+                })
+                .ConfigurePrimaryHttpMessageHandler(() => new StubRecaptchaHandler(_responder));
+            });
+        }
+    }
+
+    private static HttpResponseMessage JsonOk(string json) =>
+        new(HttpStatusCode.OK) { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") };
+
     // ─── Rate-limit coverage ──────────────────────────────────────────────────
 
     [Fact]
@@ -207,5 +275,26 @@ public class RateLimitAndRecaptchaTests
 
         var response = await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Recaptcha_EnabledWithEmptyToken_Rejects()
+    {
+        using var factory = new StubbedRecaptchaFactory(
+            _ => JsonOk("{\"success\":false}"), failOpen: false);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var req = MakeRequest("alice");
+        req.Recaptcha = string.Empty;
+
+        var response = await client.PostAsJsonAsync("/api/password", req);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.NotNull(result);
+        Assert.Contains(result!.Errors, e => e.ErrorCode == ApiErrorCode.InvalidCaptcha);
     }
 }
