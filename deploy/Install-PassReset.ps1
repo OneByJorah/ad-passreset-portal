@@ -182,6 +182,25 @@ function Restore-StoppedForeignSites {
 
 function Abort       { param([string]$Msg) Restore-StoppedForeignSites; Write-Host "`n[ERR] $Msg`n" -ForegroundColor Red; exit 1 }
 
+# STAB-016: validate that an HTTPS binding exists on the configured port. Pure function
+# (takes a binding collection) so Pester can exercise it without a live IIS site. Returns
+# a small object the caller uses to Write-Ok / Write-Warn (warn-not-block per D-13).
+function Test-HttpsBinding {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] $Bindings,
+        [Parameter(Mandatory)] [int] $HttpsPort
+    )
+    $hasHttps = $false
+    foreach ($b in $Bindings) {
+        if ($b.protocol -eq 'https' -and $b.bindingInformation -match ":${HttpsPort}:") {
+            $hasHttps = $true
+            break
+        }
+    }
+    return [pscustomobject]@{ HasHttps = $hasHttps; HttpsPort = $HttpsPort }
+}
+
 # ─── Config Sync Helpers (plan 08-05 / STAB-010) ──────────────────────────────
 # Schema-driven additive merge: walks appsettings.schema.json (NOT the template),
 # enumerates every leaf key + default, and adds anything missing from the operator's

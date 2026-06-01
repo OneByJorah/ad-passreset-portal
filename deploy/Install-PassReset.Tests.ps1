@@ -265,3 +265,27 @@ Describe 'Help: -ConfigSync is documented (STAB-011)' {
         { . (Join-Path $PSScriptRoot 'Install-PassReset.ps1') -ConfigSync Diff } | Should -Not -Throw
     }
 }
+
+Describe 'Install-PassReset: Test-HttpsBinding' {
+    It 'reports OK when an HTTPS binding exists on the target port' {
+        $bindings = @(
+            [pscustomobject]@{ protocol = 'https'; bindingInformation = '*:443:' }
+        )
+        $result = Test-HttpsBinding -Bindings $bindings -HttpsPort 443
+        $result.HasHttps | Should -BeTrue
+    }
+    It 'reports missing when no HTTPS binding exists on the target port' {
+        $bindings = @(
+            [pscustomobject]@{ protocol = 'http'; bindingInformation = '*:80:' }
+        )
+        $result = Test-HttpsBinding -Bindings $bindings -HttpsPort 443
+        $result.HasHttps | Should -BeFalse
+    }
+    It 'reports missing when HTTPS exists only on a different port' {
+        $bindings = @(
+            [pscustomobject]@{ protocol = 'https'; bindingInformation = '*:8443:' }
+        )
+        $result = Test-HttpsBinding -Bindings $bindings -HttpsPort 443
+        $result.HasHttps | Should -BeFalse
+    }
+}
