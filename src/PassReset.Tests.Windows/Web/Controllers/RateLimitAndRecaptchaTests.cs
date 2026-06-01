@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using PassReset.Common;
 using PassReset.Web.Models;
 
@@ -51,6 +52,17 @@ public class RateLimitAndRecaptchaTests
         NewPasswordVerify = "BrandNewP@ssword123",
         Recaptcha         = string.Empty,
     };
+
+    [Fact]
+    public void Recaptcha_NamedHttpClient_IsRegistered()
+    {
+        using var factory = new RateLimitFactory();
+        var clientFactory = factory.Services
+            .GetRequiredService<System.Net.Http.IHttpClientFactory>();
+        var client = clientFactory.CreateClient("recaptcha");
+        Assert.Equal(new Uri("https://www.google.com/"), client.BaseAddress);
+        Assert.Equal(TimeSpan.FromSeconds(10), client.Timeout);
+    }
 
     /// <summary>
     /// Default fixture — debug provider + reCAPTCHA disabled. Matches
