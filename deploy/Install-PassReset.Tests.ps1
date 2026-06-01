@@ -332,3 +332,15 @@ Describe 'STAB-018 HealthCheckSettings config surface' {
         { $schemaText | ConvertFrom-Json } | Should -Not -Throw
     }
 }
+
+Describe 'STAB-018 documentation' {
+    It 'appsettings-Production.md documents HealthCheckSettings and the four keys' {
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        $doc = Get-Content -Raw -Path (Join-Path $repoRoot 'docs/appsettings-Production.md')
+        $doc | Should -Match 'HealthCheckSettings'
+        $doc | Should -Match 'DisableSmtpConnectivityProbe'
+        $doc | Should -Match 'DisableExpiryServiceCheck'
+        $doc | Should -Match 'DisableAdConnectivityProbe'
+        $doc | Should -Match 'ExpiryServiceGracePeriodSeconds'
+    }
+}

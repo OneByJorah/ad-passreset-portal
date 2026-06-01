@@ -351,6 +351,33 @@ A background service that emails users before their password expires. Scans memb
 
 ---
 
+## HealthCheckSettings
+
+Controls the per-dependency probes run by `GET /api/health`. All probes are enabled
+by default. Disabling a probe reports its status as `skipped` and excludes it from the
+aggregate rollup, so a host on a restricted network can keep the endpoint green for the
+dependencies it can actually reach.
+
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `DisableSmtpConnectivityProbe` | bool | `false` | Skip the SMTP TCP probe. Use on hosts where the relay is firewalled off from the web tier but mail still flows from elsewhere. |
+| `DisableExpiryServiceCheck` | bool | `false` | Skip the password-expiry background-service check entirely. |
+| `DisableAdConnectivityProbe` | bool | `false` | Skip the Active Directory reachability probe. Use with care — this hides genuine AD outages from monitoring. |
+| `ExpiryServiceGracePeriodSeconds` | int (>= 0) | `600` | Window after process start during which an enabled-but-not-yet-run expiry service reports `healthy` instead of `degraded`. |
+
+### Fresh-deploy behavior (why `ExpiryServiceGracePeriodSeconds` exists)
+
+When `PasswordExpiryNotificationSettings.Enabled` is `true`, the background service runs
+on a daily schedule and may not have ticked when the installer's post-deploy check calls
+`/api/health` seconds after deployment. A not-yet-run service is **startup lag, not
+misconfiguration**, so within the grace window the expiry check reports `healthy` and the
+endpoint returns `200` — allowing `Install-PassReset.ps1` to confirm a successful deploy.
+After the grace window with still no tick, the check reverts to `degraded` so a genuinely
+stuck service is surfaced to monitoring. Set the window to `0` to treat any not-yet-run
+service as immediately `degraded` (legacy behavior).
+
+---
+
 ## ClientSettings
 
 Controls the UI and frontend behaviour.
