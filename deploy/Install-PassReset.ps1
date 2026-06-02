@@ -192,7 +192,11 @@ function Restore-StoppedForeignSites {
     if (-not $script:StoppedForeignSites -or $script:StoppedForeignSites.Count -eq 0) { return }
     foreach ($s in $script:StoppedForeignSites) {
         try {
-            Start-Website -Name $s -ErrorAction Stop
+            $sm = Get-PassResetServerManager
+            try {
+                $foreign = $sm.Sites[$s]
+                if ($null -ne $foreign) { $foreign.Start() | Out-Null }
+            } finally { $sm.Dispose() }
             Write-Ok "Restarted foreign site '$s' after abort"
         }
         catch {
@@ -221,6 +225,36 @@ function Test-IsDeserializedObject {
         }
         return $false
     }
+}
+
+# ─── IIS via Microsoft.Web.Administration.ServerManager (STAB-023) ──────────────
+# These helpers wrap the .NET ServerManager API. They MUST NOT be called at module
+# load time (only inside functions or the main flow below the PASSRESET_TEST_MODE
+# return) so the Pester suite can dot-source the script on hosts without IIS.
+
+function Get-PassResetServerManager {
+    <# Returns a fresh, live ServerManager handle reading current applicationHost.config.
+       After CommitChanges() a handle is stale — callers must obtain a new one for the
+       next independent operation. Requires Initialize-IIS to have loaded the assembly. #>
+    [OutputType([Microsoft.Web.Administration.ServerManager])]
+    param()
+    return [Microsoft.Web.Administration.ServerManager]::new()
+}
+
+function Test-IisAppPoolExists {
+    param([Parameter(Mandatory)] [string] $Name)
+    if (-not $script:IISAvailable) { return $false }
+    $sm = Get-PassResetServerManager
+    try   { return $null -ne $sm.ApplicationPools[$Name] }
+    finally { $sm.Dispose() }
+}
+
+function Test-IisSiteExists {
+    param([Parameter(Mandatory)] [string] $Name)
+    if (-not $script:IISAvailable) { return $false }
+    $sm = Get-PassResetServerManager
+    try   { return $null -ne $sm.Sites[$Name] }
+    finally { $sm.Dispose() }
 }
 
 function Resolve-DependencyAction {
@@ -850,12 +884,14 @@ function Get-OrCreateSelfSignedCertificate {
 function Initialize-IIS {
     <#
     .SYNOPSIS
-    Loads IISAdministration + WebAdministration NATIVELY into the PS 7 runspace
-    (-SkipEditionCheck) so the config-API objects are live, not WinPSCompat-deserialized.
-    Probes the config API after import and refuses to mark IIS available if the objects
-    came back deserialized (STAB-022). Sets $script:IISAvailable / $script:IISLoadError.
-    Never aborts — callers that strictly require IIS management must check the
-    flag themselves (e.g. after hosting-mode resolution).
+    Loads the Microsoft.Web.Administration.dll assembly (the ServerManager .NET API)
+    in-process via Add-Type. STAB-023: this replaces Import-Module of IISAdministration /
+    WebAdministration, which on PS 7 hosts route through the WinPSCompat implicit-remoting
+    session and return inert Deserialized.* config objects that fail to bind to the config
+    cmdlets. A plain .NET assembly loads in-process under CoreCLR — no module, no cmdlets,
+    no WinPSCompat, no deserialization — so it works on every host regardless of edition.
+    Sets $script:IISAvailable / $script:IISLoadError. Never aborts — callers that strictly
+    require IIS management must check the flag themselves (e.g. after hosting-mode resolution).
     #>
     [CmdletBinding()]
     param()
@@ -863,48 +899,15 @@ function Initialize-IIS {
     $script:IISAvailable = $false
     $script:IISLoadError = $null
 
-    # Primary: IISAdministration loaded NATIVELY (in-process) into the PS 7 runspace.
-    # STAB-022: the inbox IISAdministration manifest declares CompatiblePSEditions=Desktop,
-    # so a bare Import-Module routes it through the WinPSCompat implicit-remoting session.
-    # That serializes every returned Microsoft.Web.Administration object into an inert
-    # "Deserialized.*" property bag — which then FAILS to bind to Get-IISConfigCollection
-    # -ConfigElement (cannot convert Deserialized…ConfigurationSection to ConfigurationElement)
-    # and loses live properties like .Protocol. -SkipEditionCheck forces a native load so the
-    # config-API objects stay live. (The module wraps Microsoft.Web.Administration, which loads
-    # in-process under CoreCLR.)
+    # The assembly ships with the IIS management stack and lives in the inetsrv folder
+    # whenever IIS is installed. Add-Type throws if the file is missing (IIS not installed)
+    # or cannot be loaded — that is the IISAvailable=$false signal.
+    $mwaPath = Join-Path $env:windir 'system32\inetsrv\Microsoft.Web.Administration.dll'
     try {
-        Import-Module IISAdministration -SkipEditionCheck -WarningAction SilentlyContinue -ErrorAction Stop
+        Add-Type -Path $mwaPath -ErrorAction Stop
     } catch {
-        $script:IISLoadError = $_.Exception.Message
-        return
-    }
-
-    # Secondary: WebAdministration for Get-Website / New-WebAppPool / New-WebBinding
-    # (cmdlet-level proxies work through WinPSCompat; we just don't use the IIS:\ drive).
-    try {
-        Import-Module WebAdministration -SkipEditionCheck -WarningAction SilentlyContinue -ErrorAction Stop
-    } catch {
-        $script:IISLoadError = "IISAdministration loaded but WebAdministration failed: $($_.Exception.Message)"
-        return
-    }
-
-    # STAB-022 guard: prove the config API returns LIVE objects, not WinPSCompat-deserialized
-    # ones. If a host still routes IISAdministration through the compat session (e.g. the
-    # native assembly genuinely cannot load), fail here with an actionable message instead of
-    # letting the cryptic "Cannot bind parameter 'ConfigElement'" surface deep in app-pool
-    # configuration. The 'sites' section always exists, so this is a safe read-only probe.
-    try {
-        $probeSection = Get-IISConfigSection -SectionPath 'system.applicationHost/sites' -ErrorAction Stop
-        if (Test-IsDeserializedObject -InputObject $probeSection) {
-            $script:IISLoadError = "IISAdministration loaded via the Windows PowerShell compatibility (WinPSCompat) session, " +
-                "so its configuration objects are deserialized and cannot be used to configure IIS. " +
-                "Run the installer from an elevated PowerShell 7 session where IISAdministration loads natively, " +
-                "or update the IISAdministration module (Install-Module IISAdministration -Scope AllUsers). " +
-                "Diagnose with deploy\Test-PS7Iis.ps1."
-            return
-        }
-    } catch {
-        $script:IISLoadError = "IISAdministration config API probe failed: $($_.Exception.Message)"
+        $script:IISLoadError = "Microsoft.Web.Administration.dll could not be loaded from '$mwaPath' — " +
+            "is the IIS management console / Web Server (IIS) role installed? Underlying error: $($_.Exception.Message)"
         return
     }
 
@@ -924,13 +927,20 @@ function Test-PortFree {
     # Hook point for IIS-site-owned bindings during migration.
     # Without WebAdministration loaded we can't tell if an IIS site owns this port. Fall through to process-owner detection — safer than assuming the port is free.
     if ($OwnedByIisSite -and $script:IISAvailable) {
-        # IISAdministration: Get-IISSiteBinding returns native objects with real
-        # .BindingInformation property (not an ETS chain that dies in WinPSCompat).
-        $bindings = @(Get-IISSiteBinding -Name $OwnedByIisSite -ErrorAction SilentlyContinue)
-        if ($bindings | Where-Object { $_.BindingInformation -match ":${Port}:" }) {
-            Write-Verbose "Port $Port is bound by IIS site '$OwnedByIisSite' — will be freed at teardown."
-            return $true
-        }
+        # ServerManager: read the foreign site's live bindings; .BindingInformation is a
+        # real .NET property ("*:port:host").
+        $sm = Get-PassResetServerManager
+        try {
+            $ownerSite = $sm.Sites[$OwnedByIisSite]
+            if ($null -ne $ownerSite) {
+                foreach ($b in $ownerSite.Bindings) {
+                    if ($b.BindingInformation -match ":${Port}:") {
+                        Write-Verbose "Port $Port is bound by IIS site '$OwnedByIisSite' — will be freed at teardown."
+                        return $true
+                    }
+                }
+            }
+        } finally { $sm.Dispose() }
     }
 
     $owningPid = $conn[0].OwningProcess
@@ -1039,20 +1049,18 @@ if ($env:PASSRESET_TEST_MODE -eq '1') {
     return
 }
 
-# Load IIS management modules early — both hosting-mode resolution (Get-Website) and
-# Test-PortFree depend on them. Best-effort at this stage: we don't yet know
+# Load the IIS management assembly early — both hosting-mode resolution (existing-site
+# detection) and Test-PortFree depend on it. Best-effort at this stage: we don't yet know
 # whether the operator wants IIS mode. Strict IIS requirement is re-checked
 # after $HostingMode is resolved below.
 Initialize-IIS
 if (-not $script:IISAvailable) {
-    Write-Warn "IIS modules not loaded — IIS-related checks (existing site detection, IIS-owned port bindings) will be skipped."
+    Write-Warn "IIS management assembly not loaded — IIS-related checks (existing site detection, IIS-owned port bindings) will be skipped."
 }
 
 # ─── Resolve hosting mode (prompt on fresh install, default on upgrade) ────
 if (-not $HostingMode) {
-    $existingSite = if ($script:IISAvailable) {
-        Get-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-    } else { $null }
+    $existingSite = Test-IisSiteExists -Name 'PassReset'
     $default = if ($existingSite) { 'IIS' } else { $null }
     $HostingMode = Get-HostingModeInteractive -Default $default
 }
@@ -1060,9 +1068,9 @@ Write-Host "Hosting mode: $HostingMode" -ForegroundColor Cyan
 
 if ($HostingMode -eq 'IIS' -and -not $script:IISAvailable) {
     Abort @"
-IIS hosting mode was selected, but the required IIS PowerShell modules
-(IISAdministration and WebAdministration) could not be loaded. This installer
-cannot configure AppPools or Sites without them.
+IIS hosting mode was selected, but the IIS management assembly
+(Microsoft.Web.Administration.dll) could not be loaded. This installer
+cannot configure AppPools or Sites without it.
 
 Cause: IIS Management Scripts and Tools role is not installed on this host.
 
@@ -1287,12 +1295,11 @@ if (-not (Test-Path $brandPath)) {
 }
 
 # Stop the site/pool before copying so locked files are released.
-# IISAdministration + WebAdministration are loaded earlier by Initialize-IIS.
-# This block runs mode-agnostically (upgrade detection needs $siteExists for all modes),
-# so we short-circuit on $script:IISAvailable — the IISAdministration cmdlets
-# would throw under strict mode on non-IIS hosts.
-$poolExists = $script:IISAvailable -and [bool](Get-IISAppPool -Name $AppPoolName -ErrorAction SilentlyContinue)
-$siteExists = $script:IISAvailable -and [bool](Get-IISSite    -Name $SiteName    -ErrorAction SilentlyContinue)
+# The IIS management assembly is loaded earlier by Initialize-IIS.
+# This block runs mode-agnostically (upgrade detection needs $siteExists for all modes).
+# The Test-Iis* helpers short-circuit to $false when IIS is unavailable.
+$poolExists = Test-IisAppPoolExists -Name $AppPoolName
+$siteExists = Test-IisSiteExists    -Name $SiteName
 
 # ─── Upgrade detection ────────────────────────────────────────────────────────
 
@@ -1361,20 +1368,24 @@ if ($siteExists) {
     }
 }
 
-if ($poolExists) {
-    $poolState = (Get-WebAppPoolState -Name $AppPoolName).Value
-    if ($poolState -eq 'Started') {
-        Stop-WebAppPool -Name $AppPoolName
-        Write-Ok "Stopped app pool $AppPoolName"
-    }
-}
-
-if ($siteExists) {
-    $siteState = (Get-WebsiteState -Name $SiteName).Value
-    if ($siteState -eq 'Started') {
-        Stop-Website -Name $SiteName
-        Write-Ok "Stopped site $SiteName"
-    }
+if ($poolExists -or $siteExists) {
+    $sm = Get-PassResetServerManager
+    try {
+        if ($poolExists) {
+            $pool = $sm.ApplicationPools[$AppPoolName]
+            if ($null -ne $pool -and $pool.State -eq [Microsoft.Web.Administration.ObjectState]::Started) {
+                try { $pool.Stop() | Out-Null; Write-Ok "Stopped app pool $AppPoolName" }
+                catch { Write-Warn "Could not stop app pool ${AppPoolName}: $($_.Exception.Message)" }
+            }
+        }
+        if ($siteExists) {
+            $site = $sm.Sites[$SiteName]
+            if ($null -ne $site -and $site.State -eq [Microsoft.Web.Administration.ObjectState]::Started) {
+                try { $site.Stop() | Out-Null; Write-Ok "Stopped site $SiteName" }
+                catch { Write-Warn "Could not stop site ${SiteName}: $($_.Exception.Message)" }
+            }
+        }
+    } finally { $sm.Dispose() }
 }
 
 # Back up the current deployment before overwriting (upgrade only)
@@ -1478,66 +1489,43 @@ Write-Step "Configuring app pool: $AppPoolName"
 
 # BUG-003: Capture existing AppPool identity BEFORE any provisioning so we can preserve it on upgrade.
 # Initialized to $null so Set-StrictMode does not fault on unset references in the branches below.
+# STAB-023: read directly off the live ServerManager object graph — .ProcessModel.IdentityType is
+# a real enum and .UserName a real string (no WinPSCompat deserialization). NEVER read .Password.
 $existingIdentityType = $null
 $existingIdentity     = $null
 if ($poolExists) {
     try {
-        # IISAdministration config-API read. We used to dereference $pool.ProcessModel.IdentityType
-        # directly on the Microsoft.Web.Administration.ApplicationPool object returned by
-        # Get-IISAppPool, but on PS 7 that object is routed through the WinPSCompat remoting
-        # session on some Windows builds — the deserialized proxy loses the typed ProcessModel
-        # graph and the property read fails with "IdentityType cannot be found on this object".
-        # Get-IISConfigAttributeValue traverses applicationHost.config via primitive strings, so
-        # it works identically on PS 5.1 and PS 7. Returned identityType is the string enum name
-        # ('ApplicationPoolIdentity', 'SpecificUser', 'LocalSystem', ...), not the numeric code.
-        # Two-step pattern required on PS 7 via WinPSCompat: ConfigurationCollection loses the
-        # [SuppressPipelineEnumeration] attribute across the session proxy boundary, so piping
-        # Get-IISConfigCollection into Get-IISConfigCollectionElement enumerates each element
-        # (a ConfigurationElement, not a ConfigurationCollection) and parameter binding fails.
-        # Per Microsoft docs (Get-IISConfigCollectionElement Example 2), assign to a local and
-        # pass via -ConfigCollection explicitly.
-        $poolSection      = Get-IISConfigSection -SectionPath 'system.applicationHost/applicationPools'
-        $poolCollection   = Get-IISConfigCollection -ConfigElement $poolSection
-        $poolElement      = Get-IISConfigCollectionElement -ConfigCollection $poolCollection -ConfigAttribute @{ name = $AppPoolName }
-        $processModelRead = $poolElement | Get-IISConfigElement -ChildElementName 'processModel'
-        $existingIdentityType = [string](Get-IISConfigAttributeValue -ConfigElement $processModelRead -AttributeName 'identityType')
-        if ($existingIdentityType -eq 'SpecificUser') {
-            $existingIdentity = [string](Get-IISConfigAttributeValue -ConfigElement $processModelRead -AttributeName 'userName')
-        }
+        $smRead = Get-PassResetServerManager
+        try {
+            $poolRead = $smRead.ApplicationPools[$AppPoolName]
+            if ($null -ne $poolRead) {
+                $existingIdentityType = [string]$poolRead.ProcessModel.IdentityType
+                if ($existingIdentityType -eq 'SpecificUser') {
+                    $existingIdentity = [string]$poolRead.ProcessModel.UserName
+                }
+            }
+        } finally { $smRead.Dispose() }
     } catch {
         Write-Warning "Could not read existing AppPool identity: $($_.Exception.Message). Will fall through to default handling."
     }
 }
 
-if (-not $poolExists) {
-    New-WebAppPool -Name $AppPoolName | Out-Null
-    Write-Ok "Created app pool $AppPoolName"
-}
-
-# IISAdministration uses an explicit commit model — configuration writes are batched
-# between Start-IISCommitDelay and Stop-IISCommitDelay -Commit $true so the whole
-# group is applied atomically (matches how the IIS Manager GUI applies changes). The
-# try/finally ensures the delay is always resolved — otherwise it leaks. Note: we
-# use Set-IISConfigAttributeValue instead of native $pool.Property = 'x' assignments
-# because on PS 7 the Microsoft.Web.Administration.ApplicationPool object returned
-# by Get-IISAppPool can be a deserialized WinPSCompat proxy; assignments to proxy
-# NoteProperties do not round-trip back to applicationHost.config and silently no-op.
-# Stop-IISCommitDelay -Commit takes a [Boolean], not a [switch] — the bare -Commit
-# form fails with "Missing argument for parameter 'Commit'".
-Start-IISCommitDelay
+# STAB-023: ServerManager batches all mutations on one live handle, then a single
+# CommitChanges() applies them atomically (replaces Start/Stop-IISCommitDelay). The
+# objects are live .NET — property assignments round-trip to applicationHost.config.
+$sm   = Get-PassResetServerManager
 try {
-    # Two-step pattern required on PS 7 (see identity read block above).
-    $poolSection    = Get-IISConfigSection -SectionPath 'system.applicationHost/applicationPools'
-    $poolCollection = Get-IISConfigCollection -ConfigElement $poolSection
-    $poolElement    = Get-IISConfigCollectionElement -ConfigCollection $poolCollection -ConfigAttribute @{ name = $AppPoolName }
+    $pool = $sm.ApplicationPools[$AppPoolName]
+    if ($null -eq $pool) {
+        $pool = $sm.ApplicationPools.Add($AppPoolName)
+        Write-Ok "Created app pool $AppPoolName"
+    }
 
     # No managed code — ASP.NET Core runs in-process via the hosting module.
-    Set-IISConfigAttributeValue -ConfigElement $poolElement -AttributeName 'managedRuntimeVersion' -AttributeValue ''
-    Set-IISConfigAttributeValue -ConfigElement $poolElement -AttributeName 'enable32BitAppOnWin64' -AttributeValue $false
-    Set-IISConfigAttributeValue -ConfigElement $poolElement -AttributeName 'startMode'             -AttributeValue 'AlwaysRunning'
-    Set-IISConfigAttributeValue -ConfigElement $poolElement -AttributeName 'autoStart'             -AttributeValue $true
-
-    $processModel = $poolElement | Get-IISConfigElement -ChildElementName 'processModel'
+    $pool.ManagedRuntimeVersion  = ''
+    $pool.Enable32BitAppOnWin64  = $false
+    $pool.StartMode              = [Microsoft.Web.Administration.StartMode]::AlwaysRunning
+    $pool.AutoStart              = $true
 
     # BUG-003: Four-branch identity resolution.
     # NEVER read or round-trip processModel.password — it is write-only.
@@ -1549,9 +1537,9 @@ try {
         $bstr          = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($AppPoolPassword)
         $plainPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-        Set-IISConfigAttributeValue -ConfigElement $processModel -AttributeName 'identityType' -AttributeValue 'SpecificUser'
-        Set-IISConfigAttributeValue -ConfigElement $processModel -AttributeName 'userName'     -AttributeValue $AppPoolIdentity
-        Set-IISConfigAttributeValue -ConfigElement $processModel -AttributeName 'password'     -AttributeValue $plainPassword
+        $pool.ProcessModel.IdentityType = [Microsoft.Web.Administration.ProcessModelIdentityType]::SpecificUser
+        $pool.ProcessModel.UserName     = $AppPoolIdentity
+        $pool.ProcessModel.Password     = $plainPassword
         $plainPassword = $null
         Write-Ok "App pool identity: $AppPoolIdentity (explicit override)"
     }
@@ -1565,43 +1553,40 @@ try {
     }
     else {
         # Fresh install, no override → default to ApplicationPoolIdentity.
-        Set-IISConfigAttributeValue -ConfigElement $processModel -AttributeName 'identityType' -AttributeValue 'ApplicationPoolIdentity'
+        $pool.ProcessModel.IdentityType = [Microsoft.Web.Administration.ProcessModelIdentityType]::ApplicationPoolIdentity
         Write-Ok 'App pool identity: ApplicationPoolIdentity (new pool default)'
     }
+
+    $sm.CommitChanges()
 }
 finally {
-    Stop-IISCommitDelay -Commit $true
+    $sm.Dispose()
 }
 
 # ─── 5. IIS site ──────────────────────────────────────────────────────────────
 
 Write-Step "Configuring site: $SiteName"
 
-# STAB-001: detect port-80 conflict before New-Website (fresh install only;
+# STAB-001: detect port-80 conflict before creating the site (fresh install only;
 # on upgrade the existing binding is preserved).
 $selectedHttpPort = if ($HttpPort -gt 0) { $HttpPort } else { 80 }
 if (-not $siteExists -and $selectedHttpPort -eq 80) {
     Write-Step 'Checking port 80 availability'
-    # IISAdministration: walk the config collection instead of Get-WebBinding (ETS
-    # ItemXPath property does not survive the WinPSCompat deserialization boundary).
-    $sitesSection = Get-IISConfigSection -SectionPath 'system.applicationHost/sites'
+    # STAB-023: enumerate all sites' live bindings via ServerManager. .Protocol and
+    # .BindingInformation are real .NET properties (no WinPSCompat deserialization).
     $conflictSites = @()
-    foreach ($elem in (Get-IISConfigCollection -ConfigElement $sitesSection).GetCollection()) {
-        $name = Get-IISConfigAttributeValue -ConfigElement $elem -AttributeName 'name'
-        if ($name -eq $SiteName) { continue }
-
-        $bindingsElement = Get-IISConfigElement -ConfigElement $elem -ChildElementName 'bindings'
-        $bindingsColl    = Get-IISConfigCollection -ConfigElement $bindingsElement
-
-        foreach ($b in $bindingsColl.GetCollection()) {
-            $protocol = Get-IISConfigAttributeValue -ConfigElement $b -AttributeName 'protocol'
-            $bindInfo = Get-IISConfigAttributeValue -ConfigElement $b -AttributeName 'bindingInformation'
-            if ($protocol -eq 'http' -and $bindInfo -match ':80:') {
-                $conflictSites += $name
-                break
+    $smScan = Get-PassResetServerManager
+    try {
+        foreach ($scanSite in $smScan.Sites) {
+            if ($scanSite.Name -eq $SiteName) { continue }
+            foreach ($b in $scanSite.Bindings) {
+                if ($b.Protocol -eq 'http' -and $b.BindingInformation -match ':80:') {
+                    $conflictSites += $scanSite.Name
+                    break
+                }
             }
         }
-    }
+    } finally { $smScan.Dispose() }
     $conflictSites = @($conflictSites | Sort-Object -Unique)
     if ($conflictSites.Count -gt 0) {
         Write-Warn "Port 80 is already bound by: $($conflictSites -join ', ')"
@@ -1617,7 +1602,11 @@ if (-not $siteExists -and $selectedHttpPort -eq 80) {
                 '1' {
                     foreach ($s in $conflictSites) {
                         if ($PSCmdlet.ShouldProcess("IIS site $s", 'Stop')) {
-                            Stop-Website -Name $s -ErrorAction Stop
+                            $smStop = Get-PassResetServerManager
+                            try {
+                                $foreign = $smStop.Sites[$s]
+                                if ($null -ne $foreign) { $foreign.Stop() | Out-Null }
+                            } finally { $smStop.Dispose() }
                             $script:StoppedForeignSites += $s
                             Write-Ok "Stopped site '$s'"
                         }
@@ -1658,44 +1647,30 @@ if (-not $siteExists -and $selectedHttpPort -eq 80) {
     }
 }
 
-if (-not $siteExists) {
-    New-Website `
-        -Name         $SiteName `
-        -PhysicalPath $PhysicalPath `
-        -ApplicationPool $AppPoolName `
-        -Port         $selectedHttpPort `
-        -Force | Out-Null
-    Write-Ok "Created site $SiteName (HTTP :$selectedHttpPort placeholder)"
-} else {
-    # Upgrade path: apply physicalPath / applicationPool via IISAdministration's config API.
-    # Avoid $site.Applications['/'].VirtualDirectories['/'].PhysicalPath — on PS 7 the
-    # Get-IISSite object can be a deserialized WinPSCompat proxy whose nested Applications
-    # collection loses its indexer, so ['/'] fails. Walking the config sections with
-    # Set-IISConfigAttributeValue works identically on PS 5.1 and PS 7.
-    # Stop-IISCommitDelay -Commit is a [Boolean] parameter, not a switch.
-    Start-IISCommitDelay
-    try {
-        # Two-step pattern required on PS 7 via WinPSCompat: ConfigurationCollection loses the
-        # [SuppressPipelineEnumeration] attribute across the session proxy boundary. Assign the
-        # collection to a local first, then pass via -ConfigCollection (per Microsoft docs).
-        $siteSection    = Get-IISConfigSection -SectionPath 'system.applicationHost/sites'
-        $siteCollection = Get-IISConfigCollection -ConfigElement $siteSection
-        $siteElement    = Get-IISConfigCollectionElement -ConfigCollection $siteCollection -ConfigAttribute @{ name = $SiteName }
-
-        # Root application (path '/')
-        $appCollection = Get-IISConfigCollection -ConfigElement $siteElement -CollectionName 'application'
-        $rootApp       = Get-IISConfigCollectionElement -ConfigCollection $appCollection -ConfigAttribute @{ path = '/' }
-        Set-IISConfigAttributeValue -ConfigElement $rootApp -AttributeName 'applicationPool' -AttributeValue $AppPoolName
-
-        # Root virtual directory (path '/') inside the root application
-        $vdirCollection = Get-IISConfigCollection -ConfigElement $rootApp -CollectionName 'virtualDirectory'
-        $rootVdir       = Get-IISConfigCollectionElement -ConfigCollection $vdirCollection -ConfigAttribute @{ path = '/' }
-        Set-IISConfigAttributeValue -ConfigElement $rootVdir -AttributeName 'physicalPath' -AttributeValue $PhysicalPath
+# STAB-023: create / upgrade the site via the live ServerManager object graph.
+$sm = Get-PassResetServerManager
+try {
+    if (-not $siteExists) {
+        # Create with a placeholder HTTP binding on the resolved port; the root application
+        # and its '/' virtual directory are created by Sites.Add with the physical path.
+        $site = $sm.Sites.Add($SiteName, "*:${selectedHttpPort}:", $PhysicalPath)
+        $site.Applications['/'].ApplicationPoolName = $AppPoolName
+        $sm.CommitChanges()
+        Write-Ok "Created site $SiteName (HTTP :$selectedHttpPort placeholder)"
+    } else {
+        # Upgrade path: point the root application at our pool and the root vdir at the
+        # (possibly new) physical path. .Applications['/'] / .VirtualDirectories['/'] are
+        # live indexers on the ServerManager object — no WinPSCompat proxy to lose them.
+        $site = $sm.Sites[$SiteName]
+        $rootApp = $site.Applications['/']
+        $rootApp.ApplicationPoolName = $AppPoolName
+        $rootApp.VirtualDirectories['/'].PhysicalPath = $PhysicalPath
+        $sm.CommitChanges()
+        Write-Ok "Updated site $SiteName"
     }
-    finally {
-        Stop-IISCommitDelay -Commit $true
-    }
-    Write-Ok "Updated site $SiteName"
+}
+finally {
+    $sm.Dispose()
 }
 
 # HTTPS binding
@@ -1712,23 +1687,24 @@ if ($CertThumbprint) {
     if (-not $cert) {
         Write-Warn "Certificate with thumbprint $CertThumbprint not found in LocalMachine\My — skipping HTTPS binding."
     } else {
-        # IISAdministration: remove existing HTTPS binding on this port (WinPSCompat
-        # strips .AddSslCertificate() instance method from Get-WebBinding proxies).
-        $existingBindings = @(Get-IISSiteBinding -Name $SiteName -Protocol https -ErrorAction SilentlyContinue)
-        foreach ($b in $existingBindings) {
-            if ($b.BindingInformation -match ":${HttpsPort}:") {
-                Remove-IISSiteBinding -Name $SiteName -BindingInformation $b.BindingInformation -Protocol https -Confirm:$false
-            }
-        }
+        # STAB-023: mutate the site's live Bindings collection via ServerManager.
+        # Remove any existing https binding on $HttpsPort, then add a new one bound to
+        # the cert. The SSL overload takes the cert HASH (byte[] from GetCertHash()),
+        # NOT the thumbprint string, plus the store name ('My').
+        $sm = Get-PassResetServerManager
+        try {
+            $site = $sm.Sites[$SiteName]
+            $toRemove = @($site.Bindings | Where-Object {
+                $_.Protocol -eq 'https' -and $_.BindingInformation -match ":${HttpsPort}:"
+            })
+            foreach ($b in $toRemove) { $site.Bindings.Remove($b) }
 
-        # New-IISSiteBinding binds the cert atomically — no method call needed.
-        New-IISSiteBinding -Name $SiteName `
-            -BindingInformation "*:${HttpsPort}:" `
-            -Protocol https `
-            -CertificateThumbPrint $CertThumbprint `
-            -CertStoreLocation 'My' `
-            | Out-Null
-        Write-Ok "HTTPS binding configured on port $HttpsPort"
+            $newHttps = $site.Bindings.Add("*:${HttpsPort}:", ([byte[]]$cert.GetCertHash()), 'My')
+            $newHttps.Protocol = 'https'
+            $sm.CommitChanges()
+            Write-Ok "HTTPS binding configured on port $HttpsPort"
+        }
+        finally { $sm.Dispose() }
     }
 } else {
     Write-Warn 'No certificate thumbprint supplied — HTTPS binding not configured. Add it manually or re-run with -CertThumbprint.'
@@ -1736,26 +1712,38 @@ if ($CertThumbprint) {
 
 # HTTP binding — keep for HTTP→HTTPS redirect unless operator explicitly passes -HttpPort 0
 if ($CertThumbprint -and $HttpPort -le 0) {
-    $httpBindings = @(Get-IISSiteBinding -Name $SiteName -Protocol http -ErrorAction SilentlyContinue)
-    foreach ($b in $httpBindings) {
-        Remove-IISSiteBinding -Name $SiteName -BindingInformation $b.BindingInformation -Protocol http -Confirm:$false
+    $sm = Get-PassResetServerManager
+    try {
+        $site = $sm.Sites[$SiteName]
+        $httpBindings = @($site.Bindings | Where-Object { $_.Protocol -eq 'http' })
+        foreach ($b in $httpBindings) { $site.Bindings.Remove($b) }
+        if ($httpBindings.Count -gt 0) {
+            $sm.CommitChanges()
+            Write-Ok 'Removed HTTP binding (HTTPS-only mode: -HttpPort 0)'
+        }
     }
-    if ($httpBindings.Count -gt 0) {
-        Write-Ok 'Removed HTTP binding (HTTPS-only mode: -HttpPort 0)'
-    }
+    finally { $sm.Dispose() }
 } elseif ($CertThumbprint) {
     # Ensure the HTTP binding exists on the site's *resolved* port so ASP.NET Core
     # UseHttpsRedirection() can receive and redirect plain-HTTP requests.
     # STAB-001: must be $selectedHttpPort (alternate port chosen on a port-80 conflict),
     # NOT the original $HttpPort param — otherwise we re-bind an occupied port 80.
-    $existingHttp = @(Get-IISSiteBinding -Name $SiteName -Protocol http -ErrorAction SilentlyContinue) |
-        Where-Object { $_.BindingInformation -match ":${selectedHttpPort}:" }
-    if (-not $existingHttp) {
-        New-IISSiteBinding -Name $SiteName -BindingInformation "*:${selectedHttpPort}:" -Protocol http | Out-Null
-        Write-Ok "HTTP :$selectedHttpPort binding retained for HTTP→HTTPS redirect"
-    } else {
-        Write-Ok "HTTP :$selectedHttpPort binding present (HTTP→HTTPS redirect active)"
+    $sm = Get-PassResetServerManager
+    try {
+        $site = $sm.Sites[$SiteName]
+        $existingHttp = @($site.Bindings | Where-Object {
+            $_.Protocol -eq 'http' -and $_.BindingInformation -match ":${selectedHttpPort}:"
+        })
+        if ($existingHttp.Count -eq 0) {
+            $newHttp = $site.Bindings.Add("*:${selectedHttpPort}:", 'http')
+            $newHttp.Protocol = 'http'
+            $sm.CommitChanges()
+            Write-Ok "HTTP :$selectedHttpPort binding retained for HTTP→HTTPS redirect"
+        } else {
+            Write-Ok "HTTP :$selectedHttpPort binding present (HTTP→HTTPS redirect active)"
+        }
     }
+    finally { $sm.Dispose() }
 }
 
 # STAB-001 D-03: announce the reachable URLs so operators don't have to inspect IIS.
@@ -1764,9 +1752,22 @@ if ($CertThumbprint -and $HttpPort -le 0) {
 # the HTTPS binding host when a cert is bound (health check targets HTTPS), else the
 # HTTP binding host, else the machine name. Strict-mode guard: assign the
 # Select-Object result to a local and null-check before touching .BindingInformation.
+# STAB-023: snapshot the site's live bindings once via ServerManager into plain
+# pscustomobjects. .Protocol / .BindingInformation are real .NET props (no proxy).
+$siteBindings = @()
+$smSnap = Get-PassResetServerManager
+try {
+    $snapSite = $smSnap.Sites[$SiteName]
+    if ($null -ne $snapSite) {
+        $siteBindings = @($snapSite.Bindings | ForEach-Object {
+            [pscustomobject]@{ Protocol = $_.Protocol; BindingInformation = $_.BindingInformation }
+        })
+    }
+} finally { $smSnap.Dispose() }
+
 $hostHeader = $env:COMPUTERNAME
-$httpsB = @(Get-IISSiteBinding -Name $SiteName -Protocol https -ErrorAction SilentlyContinue) | Select-Object -First 1
-$httpB  = @(Get-IISSiteBinding -Name $SiteName -Protocol http  -ErrorAction SilentlyContinue) | Select-Object -First 1
+$httpsB = @($siteBindings | Where-Object { $_.Protocol -eq 'https' }) | Select-Object -First 1
+$httpB  = @($siteBindings | Where-Object { $_.Protocol -eq 'http'  }) | Select-Object -First 1
 $httpsBindingInfo = if ($httpsB) { $httpsB.BindingInformation } else { $null }
 $httpBindingInfo  = if ($httpB)  { $httpB.BindingInformation }  else { $null }
 if ($CertThumbprint -and $httpsBindingInfo) {
@@ -1779,9 +1780,8 @@ if (-not $siteExists) {
 } else {
     # WR-02: read the actual HTTP binding(s) from IIS — previous installs on
     # alternate ports (e.g. 8081) must not be mis-announced as :$HttpPort.
-    # IISAdministration: .BindingInformation (PascalCase) is a real .NET property
-    # that survives the WinPSCompat boundary, unlike Get-WebBinding's ETS proxy.
-    $httpBindings = @(Get-IISSiteBinding -Name $SiteName -Protocol http -ErrorAction SilentlyContinue)
+    # .BindingInformation (PascalCase) comes from the live ServerManager snapshot above.
+    $httpBindings = @($siteBindings | Where-Object { $_.Protocol -eq 'http' })
     if ($httpBindings.Count -gt 0) {
         foreach ($b in $httpBindings) {
             # BindingInformation is "*:port:host"
@@ -1798,10 +1798,9 @@ if ($CertThumbprint) {
 
 # STAB-016: validate binding/redirect consistency and emit a structured, secret-free
 # final binding configuration block (warn-not-block per D-13).
-$allBindings = @(Get-IISSiteBinding -Name $SiteName -ErrorAction SilentlyContinue) |
-    ForEach-Object {
+$allBindings = @($siteBindings | ForEach-Object {
         [pscustomobject]@{ protocol = $_.Protocol; bindingInformation = $_.BindingInformation }
-    }
+    })
 $httpsCheck = Test-HttpsBinding -Bindings $allBindings -HttpsPort $HttpsPort
 
 Write-Host "`n*** FINAL BINDING CONFIGURATION ***" -ForegroundColor Cyan
@@ -2016,22 +2015,23 @@ if (Test-Path $prodConfig) {
 function Set-PoolEnvVar {
     param([string] $PoolName, [string] $VarName, [SecureString] $SecureValue)
 
-    # IISAdministration config collection API (MACHINE/WEBROOT/APPHOST PSPath
-    # belongs to the same IIS:\ family that fails across WinPSCompat).
-    Start-IISCommitDelay
+    # STAB-023: mutate the pool's environmentVariables collection on the live
+    # ServerManager object, then CommitChanges() once. Idempotent: an existing
+    # same-named entry is never overwritten (secrets).
+    $sm = Get-PassResetServerManager
     try {
-        $poolSection    = Get-IISConfigSection -SectionPath 'system.applicationHost/applicationPools'
-        $poolCollection = Get-IISConfigCollection -ConfigElement $poolSection
-        $poolElement    = Get-IISConfigCollectionElement -ConfigCollection $poolCollection -ConfigAttribute @{ name = $PoolName }
+        $pool = $sm.ApplicationPools[$PoolName]
+        if ($null -eq $pool) {
+            Write-Warn "App pool $PoolName not found — cannot set $VarName"
+            return
+        }
 
-        $envVarsElement = Get-IISConfigElement -ConfigElement $poolElement -ChildElementName 'environmentVariables'
-        $envVarsColl    = Get-IISConfigCollection -ConfigElement $envVarsElement
+        $coll = $pool.GetCollection('environmentVariables')
 
         # Check for an existing entry with this name (idempotence — never overwrite).
         $alreadySet = $false
-        foreach ($ev in $envVarsColl.GetCollection()) {
-            $existingName = Get-IISConfigAttributeValue -ConfigElement $ev -AttributeName 'name'
-            if ($existingName -eq $VarName) { $alreadySet = $true; break }
+        foreach ($ev in $coll) {
+            if ([string]$ev.GetAttributeValue('name') -eq $VarName) { $alreadySet = $true; break }
         }
 
         if ($alreadySet) {
@@ -2043,13 +2043,17 @@ function Set-PoolEnvVar {
         $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 
-        New-IISConfigCollectionElement -ConfigCollection $envVarsColl -ConfigAttribute @{ name = $VarName; value = $plain } | Out-Null
+        $element = $coll.CreateElement('add')
+        $element['name']  = $VarName
+        $element['value'] = $plain
+        $coll.Add($element) | Out-Null
 
         $plain = $null
+        $sm.CommitChanges()
         Write-Ok "$VarName → $PoolName environment"
     }
     finally {
-        Stop-IISCommitDelay -Commit $true
+        $sm.Dispose()
     }
 }
 
@@ -2078,13 +2082,23 @@ if ($RecaptchaPrivateKey) {
 Write-Step 'Starting app pool and site'
 
 try {
-    Start-WebAppPool -Name $AppPoolName -ErrorAction Stop
-    Start-Website    -Name $SiteName    -ErrorAction Stop
+    # STAB-023: .Start()/.Stop() act immediately on the live object (no CommitChanges).
+    $sm = Get-PassResetServerManager
+    try {
+        $pool = $sm.ApplicationPools[$AppPoolName]
+        $site = $sm.Sites[$SiteName]
+        # .Start() throws if already started/transitioning — tolerate.
+        try { $pool.Start() | Out-Null } catch { Write-Verbose "Pool start: $($_.Exception.Message)" }
+        try { $site.Start() | Out-Null } catch { Write-Verbose "Site start: $($_.Exception.Message)" }
+    } finally { $sm.Dispose() }
 
     # Give the worker process a moment to actually start (or crash).
     Start-Sleep -Seconds 3
-    $poolStateAfter = (Get-WebAppPoolState -Name $AppPoolName).Value
-    $siteStateAfter = (Get-WebsiteState    -Name $SiteName).Value
+    $smChk = Get-PassResetServerManager
+    try {
+        $poolStateAfter = [string]$smChk.ApplicationPools[$AppPoolName].State
+        $siteStateAfter = [string]$smChk.Sites[$SiteName].State
+    } finally { $smChk.Dispose() }
     if ($poolStateAfter -ne 'Started' -or $siteStateAfter -ne 'Started') {
         throw "Pool state: $poolStateAfter, Site state: $siteStateAfter — expected Started"
     }
@@ -2099,16 +2113,24 @@ catch {
     if ($backupPath -and (Test-Path $backupPath)) {
         Write-Warn 'Attempting automatic rollback from backup...'
         try {
-            if ((Get-WebAppPoolState -Name $AppPoolName).Value -eq 'Started') {
-                Stop-WebAppPool -Name $AppPoolName -ErrorAction SilentlyContinue
-            }
-            if ((Get-WebsiteState -Name $SiteName).Value -eq 'Started') {
-                Stop-Website -Name $SiteName -ErrorAction SilentlyContinue
-            }
+            $smRb = Get-PassResetServerManager
+            try {
+                $rbPool = $smRb.ApplicationPools[$AppPoolName]
+                $rbSite = $smRb.Sites[$SiteName]
+                if ($null -ne $rbPool -and $rbPool.State -eq [Microsoft.Web.Administration.ObjectState]::Started) {
+                    try { $rbPool.Stop() | Out-Null } catch { }
+                }
+                if ($null -ne $rbSite -and $rbSite.State -eq [Microsoft.Web.Administration.ObjectState]::Started) {
+                    try { $rbSite.Stop() | Out-Null } catch { }
+                }
+            } finally { $smRb.Dispose() }
             robocopy $backupPath $PhysicalPath /MIR /NFL /NDL /NJH /NJS /R:3 /W:5 | Out-Null
             if ($LASTEXITCODE -ge 8) { throw "robocopy rollback failed ($LASTEXITCODE)" }
-            Start-WebAppPool -Name $AppPoolName -ErrorAction Stop
-            Start-Website    -Name $SiteName    -ErrorAction Stop
+            $smRb2 = Get-PassResetServerManager
+            try {
+                $smRb2.ApplicationPools[$AppPoolName].Start() | Out-Null
+                $smRb2.Sites[$SiteName].Start() | Out-Null
+            } finally { $smRb2.Dispose() }
             Write-Ok "Rolled back to backup: $backupPath"
             Abort 'Upgrade failed — previous version has been restored. Investigate the new build before retrying.'
         }
@@ -2125,14 +2147,25 @@ elseif ($HostingMode -eq 'Service') {
     if (-not (Test-ServiceModePreflight -CertThumbprint $CertThumbprint -PfxPath $PfxPath -PfxPassword $PfxPassword -ServiceAccount $ServiceAccount -MigrateFromIisSite 'PassReset')) {
         throw "Service-mode preflight failed. See warnings above. No changes made."
     }
-    $existingSite = Get-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-    if ($existingSite) {
+    if (Test-IisSiteExists -Name 'PassReset') {
         Write-Host "Migrating from IIS: tearing down existing site..." -ForegroundColor Yellow
-        Stop-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-        Remove-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-        if (Get-IISAppPool -Name $AppPoolName -ErrorAction SilentlyContinue) {
-            Remove-WebAppPool -Name $AppPoolName
+        # STAB-023: stop + remove the site and pool via ServerManager, commit once.
+        $sm = Get-PassResetServerManager
+        try {
+            $site = $sm.Sites['PassReset']
+            if ($null -ne $site) {
+                if ($site.State -eq [Microsoft.Web.Administration.ObjectState]::Started) {
+                    try { $site.Stop() | Out-Null } catch { }
+                }
+                $sm.Sites.Remove($site)
+            }
+            $pool = $sm.ApplicationPools[$AppPoolName]
+            if ($null -ne $pool) {
+                $sm.ApplicationPools.Remove($pool)
+            }
+            $sm.CommitChanges()
         }
+        finally { $sm.Dispose() }
     }
     Install-AsWindowsService `
         -BinaryPath (Join-Path $PhysicalPath 'PassReset.Web.exe') `
