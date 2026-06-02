@@ -12,6 +12,20 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.0.3] — 2026-06-02
+
+Patch release. Fixes a PowerShell 7 installer failure on hosts where `IISAdministration` loads via the Windows PowerShell compatibility session, plus routine dependency updates. No application code changes.
+
+### Fixed
+
+- **Installer failed during app-pool/site configuration on some hosts** with `Get-IISConfigCollection: Cannot bind parameter 'ConfigElement'. Cannot convert the "Deserialized.Microsoft.Web.Administration.ConfigurationSection" value … to type "Microsoft.Web.Administration.ConfigurationElement"` and a follow-on `The property 'protocol' cannot be found in this object`. Root cause: the inbox `IISAdministration` module declares `CompatiblePSEditions=Desktop`, so PowerShell 7 loaded it through the Windows PowerShell compatibility (WinPSCompat) implicit-remoting session — which serialized every `Microsoft.Web.Administration` object into an inert `Deserialized.*` property bag that the config-API cmdlets can't bind and that loses live properties like `.Protocol`. The installer now imports `IISAdministration`/`WebAdministration` with `-SkipEditionCheck` (native in-process load), and `Initialize-IIS` probes the config API after import — if objects still come back deserialized it fails with an actionable message instead of the cryptic binding error. `deploy/Test-PS7Iis.ps1` gained a decisive live-vs-deserialized config-section probe. *(installer)*
+
+### Changed
+
+- **Dependency updates.** NuGet: `Microsoft.NET.Test.Sdk` 17.14 → 18.6, the `Microsoft.Extensions.*` / `System.DirectoryServices.*` family → 10.0.8, `MailKit` 4.16 → 4.17, `coverlet.msbuild` 10.0.0 → 10.0.1. npm (minor+patch): `react`/`react-dom` 19.2.7, `vite` 8.0.16, `vitest`/`@vitest/coverage-v8` 4.1.8, `playwright` 1.60, `jsdom`, `typescript-eslint`, `@vitejs/plugin-react`, `@types/react`. Backend 351 tests + frontend 57 tests green; 0 npm vulnerabilities. *(deps)*
+
+---
+
 ## [2.0.2] — 2026-06-02
 
 Stabilization release. Closes all 16 partial v1.4.0 hardening issues (STAB-001 … STAB-021) plus release-pipeline fixes. No breaking changes — existing IIS deployments upgrade with no config changes; the new `HealthCheckSettings` and installer flags are opt-in with safe defaults.

@@ -863,3 +863,38 @@ fix (CLAUDE.md directive, hooks-based guard) is warranted. For this session,
 my commitment: every remaining turn in Phase 11 CI debug includes a
 synthesis sentence after any tool result > 5 lines, even when the output
 seems obvious to me.
+
+---
+
+## 2026-06-02 — PS7 + IISAdministration: "Deserialized.*" objects = WinPSCompat load (STAB-022)
+
+**Symptom:** `Install-PassReset.ps1` failed during app-pool/site config with
+`Get-IISConfigCollection: Cannot bind parameter 'ConfigElement'. Cannot convert
+the "Deserialized.Microsoft.Web.Administration.ConfigurationSection" value … to
+type "Microsoft.Web.Administration.ConfigurationElement"`, plus a downstream
+`The property 'protocol' cannot be found in this object`.
+
+**Root cause:** The inbox `IISAdministration` manifest declares
+`CompatiblePSEditions=Desktop`. A bare `Import-Module IISAdministration` under
+PowerShell 7 therefore routes the module through the **WinPSCompat implicit-remoting
+session**, which serializes every returned `Microsoft.Web.Administration` object into
+an inert `Deserialized.*` property bag — no live methods, downcased/stripped
+properties. Those objects can't bind to `Get-IISConfigCollection -ConfigElement`
+(needs a live `ConfigurationElement`) and lose live properties like `.Protocol`.
+
+**The tell:** any object type name beginning `Deserialized.` means it crossed the
+compat boundary. If a script uses the `IISAdministration` *config API*
+(`Get-IISConfigSection`/`Collection`/`Set-IISConfigAttributeValue`/commit-delay),
+those objects MUST be live — there is no per-call workaround.
+
+**Fix (at the source):** `Import-Module IISAdministration -SkipEditionCheck` forces
+a native in-process load (the module wraps `Microsoft.Web.Administration`, which loads
+under CoreCLR). Then PROBE after import — `Get-IISConfigSection … | Test-IsDeserializedObject`
+— and fail with an actionable message if still deserialized, rather than letting the
+cryptic binding error surface deep in configuration (defense-in-depth at the load layer).
+
+**How to apply:** when a PS7 script consumes rich .NET/COM objects from a Windows-only
+module and gets cryptic parameter-binding failures, first check the object's
+`PSObject.TypeNames[0]` for a `Deserialized.` prefix. If present, force native load
+with `-SkipEditionCheck` and verify with a live-object probe. `deploy/Test-PS7Iis.ps1`
+now carries that probe as the decisive diagnostic.

@@ -641,3 +641,38 @@ Describe 'Install-PassReset: STAB-019 regression guards' {
         (Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw) | Should -Match 'if \(-not \$SkipHealthCheck\)'
     }
 }
+
+# ── STAB-022 / 2.0.2 install bug: IISAdministration loaded via WinPSCompat returns
+#    Deserialized.* objects that break Get-IISConfigCollection + $_.Protocol. ────────
+
+Describe 'Install-PassReset: Test-IsDeserializedObject' {
+    It 'returns $true for a Deserialized.* typed object name' {
+        # Synthesize an object whose type name starts with Deserialized. (what WinPSCompat yields).
+        $fake = [pscustomobject]@{ x = 1 }
+        # Re-tag its type name to simulate a WinPSCompat-deserialized object.
+        $fake.PSObject.TypeNames.Insert(0, 'Deserialized.Microsoft.Web.Administration.ConfigurationSection')
+        Test-IsDeserializedObject -InputObject $fake | Should -BeTrue
+    }
+    It 'returns $false for a live local object' {
+        Test-IsDeserializedObject -InputObject ([pscustomobject]@{ x = 1 }) | Should -BeFalse
+    }
+    It 'returns $false for $null (nothing to classify)' {
+        Test-IsDeserializedObject -InputObject $null | Should -BeFalse
+    }
+    It 'returns $false for a plain string' {
+        Test-IsDeserializedObject -InputObject 'system.applicationHost/sites' | Should -BeFalse
+    }
+}
+
+Describe 'Install-PassReset: Initialize-IIS forces native IISAdministration load' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    It 'imports IISAdministration with -SkipEditionCheck (native, not WinPSCompat)' {
+        $script:Src | Should -Match 'Import-Module IISAdministration[^\r\n]*-SkipEditionCheck'
+    }
+    It 'guards against a deserialized config section via Test-IsDeserializedObject' {
+        $script:Src | Should -Match 'Test-IsDeserializedObject'
+    }
+    It 'surfaces an actionable error mentioning WinPSCompat/compatibility when objects are deserialized' {
+        $script:Src | Should -Match '(?i)compat'
+    }
+}
