@@ -12,6 +12,40 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.0.2] — 2026-06-02
+
+Stabilization release. Closes all 16 partial v1.4.0 hardening issues (STAB-001 … STAB-021) plus release-pipeline fixes. No breaking changes — existing IIS deployments upgrade with no config changes; the new `HealthCheckSettings` and installer flags are opt-in with safe defaults.
+
+### Added
+
+- **`HealthCheckSettings`** — per-probe toggles (`DisableSmtpConnectivityProbe`, `DisableExpiryServiceCheck`, `DisableAdConnectivityProbe`) and `ExpiryServiceGracePeriodSeconds` for `GET /api/health`, bound with `ValidateOnStart`. Disabled probes report `skipped` and roll up to healthy, so hosts on restricted networks keep the endpoint green for reachable dependencies. *(web, #31 STAB-018)*
+- **Installer dependency flags** — `-InstallDependencies prompt|yes|no` and `-SkipDependencyCheck` for non-interactive prerequisite handling; post-DISM IIS feature re-validation; reboot-pending (DISM 3010) abort before site creation; structured .NET Hosting Bundle diagnostics with optional `winget` auto-install. *(installer, #21 STAB-006)*
+- **Installer `-Reconfigure` switch** — explicitly forces reconfigure mode on an existing install (re-apply binding/config without mirroring files); same-version re-runs auto-detect it. *(installer, #20 STAB-002)*
+- **`powershell-quality` CI gate** — PowerShell parse-check, UTF-8/no-BOM encoding check, PSScriptAnalyzer (Error severity), and Pester for the installer + new uninstaller suites; gates both `ci.yml` and the release pipeline. *(ci, #39 STAB-005)*
+
+### Fixed
+
+- **Post-deploy health verification now fails on a non-healthy aggregate status**, not just non-200 — a 200 with `status: degraded`/`unhealthy` is treated as failure. Prints actionable diagnostics (logs path, Event Viewer, app-pool, binding) and resolves the health host header from the actual IIS binding (custom hostnames + HTTPS). Now runs in IIS, Service, and Console modes. *(installer, #34 STAB-019)*
+- **Fresh deploys with the expiry service enabled no longer report `degraded`/503** — a not-yet-run service is `healthy` within a grace window (default 600s), so the installer post-deploy check passes; a genuinely stuck service still surfaces as `degraded` past the window. Fixed the debug-provider branch that ignored `PasswordExpiryNotificationSettings.Enabled`. *(web, #31 STAB-018)*
+- **HTTP→HTTPS redirect binding now uses the resolved alternate port** (`$selectedHttpPort`) instead of the original `-HttpPort`, so installs on a host where port 80 is occupied no longer attempt to re-bind it. *(installer, #19 STAB-001)*
+- **Reconfigure (same-version re-run) banner** now reads "reconfigured" instead of "upgraded"; the misleading upgrade/backup messaging on reconfigure runs is gone. *(installer, #20 STAB-002)*
+- **`E_ACCESSDENIED` wrapped in `UnauthorizedAccessException`** is now mapped to `PasswordTooRecentlyChanged` instead of falling through to a generic error. *(provider, STAB-004)*
+- **LDAP provider reads complexity/history policy from the domain root** (degrades gracefully on failure) instead of hardcoding `complexity=false`/`history=0`. *(provider, STAB-021)*
+- **Structured `AuditEvent` is now wired into production** — `Audit()` emits structured events with an `Activity` TraceId and a `PasswordChangeAttemptStarted` anchor; secrets are never written to the audit `Detail`. *(web, STAB-015)*
+- **reCAPTCHA verification is testable** via an injected named `HttpClient` (drops the static field), with fail-open/fail-closed behavior covered by tests. *(web, STAB-014)*
+- **Config sync runs on all hosting modes** (IIS, Service, Console), adds keys when an entire parent section is missing, and is StrictMode-safe; adds a `Diff` dry-run mode, per-file backup, and a durable sync log. *(installer, STAB-010/011)*
+- **`appsettings.schema.json` now covers all config sections** (`AdminSettings`, `Kestrel`, `PasswordChangeOptions.LocalPolicy`), enforced by a CI schema-drift gate. *(installer, STAB-008)*
+- **Installer emits a final binding-configuration block and validates HTTPS-binding consistency**; the health response is guarded against leaking LDAP/service-account secrets. *(installer/web, STAB-016/017)*
+- **`Uninstall-PassReset.ps1`** now has Pester AST coverage (parse, params, `-KeepFiles` guard, IIS/pool/service removal, `-Force`). *(installer, #39 STAB-005)*
+- **Release-pipeline hardening** — stripped pre-existing UTF-8 BOMs from the installer scripts and made PSGallery module installation resilient on `windows-latest` (the legacy `Set-PSRepository` could fail the gate). *(deploy/ci, #39 STAB-005)*
+
+### Changed
+
+- **AD password policy panel** displays minimum/maximum password age. *(web, STAB-021)*
+- Documentation updated across `docs/` for the new health, installer, and config-sync behavior; added a `#34` post-deploy-verification UAT runbook. *(docs)*
+
+---
+
 ## [2.0.1] — 2026-06-01
 
 Release-pipeline hardening. No application code changes — the shipped app is identical to 2.0.0. This patch exists because the 2.0.0 tag's release run failed on two pre-existing CI defects (the release artifact was never published), and the `v2.0.0` tag is immutable.
