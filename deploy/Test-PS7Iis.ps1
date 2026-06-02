@@ -71,10 +71,10 @@ Heading 'IISAdministration (modern)'
 Probe 'Module available' {
     [bool](Get-Module IISAdministration -ListAvailable)
 }
-Probe 'Import (native PS 7)' {
+Probe 'Import native (-SkipEditionCheck, as the installer does)' {
     Remove-Module IISAdministration -ErrorAction SilentlyContinue
     $warnings = $null
-    Import-Module IISAdministration -WarningVariable warnings -WarningAction SilentlyContinue -ErrorAction Stop
+    Import-Module IISAdministration -SkipEditionCheck -WarningVariable warnings -WarningAction SilentlyContinue -ErrorAction Stop
     if ($warnings) { "imported with warnings: $($warnings -join '; ')" } else { 'imported cleanly' }
 }
 Probe 'Get-IISAppPool command available' {
@@ -92,6 +92,17 @@ Probe 'Get-IISServerManager callable' {
     $sm = Get-IISServerManager
     if ($sm) { $sm.GetType().FullName } else { $false }
 }
+# STAB-022: the decisive probe. If the config section comes back as a
+# "Deserialized.*" type, IISAdministration is routing through WinPSCompat and the
+# installer's Get-IISConfigCollection / $_.Protocol calls will FAIL. This must be live.
+Probe 'Config section is LIVE (not Deserialized.* — STAB-022)' {
+    $section = Get-IISConfigSection -SectionPath 'system.applicationHost/sites' -ErrorAction Stop
+    $typeName = @($section.PSObject.TypeNames)[0]
+    if ($typeName -like 'Deserialized.*') {
+        throw "DESERIALIZED ($typeName) — IISAdministration loaded via WinPSCompat; install will fail. Update IISAdministration or run in a session where it loads natively."
+    }
+    "live: $typeName"
+}
 
 Heading 'Compatibility session check'
 Probe 'WinPSCompat session present' {
@@ -102,6 +113,8 @@ Probe 'WinPSCompat session present' {
 Heading 'Summary'
 Write-Host ""
 Write-Host "Paste the full output above into the GitHub issue for PassReset."
-Write-Host "Expected outcome: IISAdministration loads natively (no compat session)"
-Write-Host "and Get-IISAppPool works. If that's true, migration is safe."
+Write-Host "Expected outcome: IISAdministration loads natively (no compat session),"
+Write-Host "the 'Config section is LIVE' probe is OK (not Deserialized.*), and Get-IISAppPool works."
+Write-Host "If 'Config section is LIVE' shows DESERIALIZED, the install will fail (STAB-022) —"
+Write-Host "update the IISAdministration module (Install-Module IISAdministration -Scope AllUsers)."
 Write-Host ""

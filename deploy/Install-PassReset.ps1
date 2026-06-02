@@ -204,6 +204,25 @@ function Restore-StoppedForeignSites {
 
 function Abort       { param([string]$Msg) Restore-StoppedForeignSites; Write-Host "`n[ERR] $Msg`n" -ForegroundColor Red; exit 1 }
 
+function Test-IsDeserializedObject {
+    <#
+        STAB-022: detect objects that crossed the Windows PowerShell compatibility
+        (WinPSCompat) remoting boundary. PS 7 serializes such objects into inert
+        property bags whose type name is prefixed "Deserialized." — these lose live
+        methods/.NET properties and FAIL to bind to cmdlets expecting a live
+        Microsoft.Web.Administration.ConfigurationElement (the 2.0.2 install bug).
+        Returns $false for $null and for any locally-constructed live object.
+    #>
+    param([Parameter(ValueFromPipeline)] $InputObject)
+    process {
+        if ($null -eq $InputObject) { return $false }
+        foreach ($typeName in $InputObject.PSObject.TypeNames) {
+            if ($typeName -like 'Deserialized.*') { return $true }
+        }
+        return $false
+    }
+}
+
 function Resolve-DependencyAction {
     <#
         STAB-006: decide how to handle a missing prerequisite without prompting in
@@ -831,10 +850,10 @@ function Get-OrCreateSelfSignedCertificate {
 function Initialize-IIS {
     <#
     .SYNOPSIS
-    Loads the IISAdministration module (PowerShell Core-friendly, no compat-session).
-    Also loads WebAdministration for cmdlet-level compat (Get-Website, New-Website, etc.
-    still work via WinPSCompat), but does NOT attempt drive-based operations.
-    Sets $script:IISAvailable to indicate whether IIS management is usable.
+    Loads IISAdministration + WebAdministration NATIVELY into the PS 7 runspace
+    (-SkipEditionCheck) so the config-API objects are live, not WinPSCompat-deserialized.
+    Probes the config API after import and refuses to mark IIS available if the objects
+    came back deserialized (STAB-022). Sets $script:IISAvailable / $script:IISLoadError.
     Never aborts — callers that strictly require IIS management must check the
     flag themselves (e.g. after hosting-mode resolution).
     #>
@@ -844,12 +863,17 @@ function Initialize-IIS {
     $script:IISAvailable = $false
     $script:IISLoadError = $null
 
-    # Primary: IISAdministration (PS Core-native, no compat session needed).
-    # Replaces every Set-ItemProperty "IIS:\..." / Get-WebConfigurationProperty -PSPath 'IIS:\'
-    # call site, because the IIS:\ PSDrive is NOT auto-proxied from the WinPSCompat
-    # remoting session into the caller's PS 7 runspace.
+    # Primary: IISAdministration loaded NATIVELY (in-process) into the PS 7 runspace.
+    # STAB-022: the inbox IISAdministration manifest declares CompatiblePSEditions=Desktop,
+    # so a bare Import-Module routes it through the WinPSCompat implicit-remoting session.
+    # That serializes every returned Microsoft.Web.Administration object into an inert
+    # "Deserialized.*" property bag — which then FAILS to bind to Get-IISConfigCollection
+    # -ConfigElement (cannot convert Deserialized…ConfigurationSection to ConfigurationElement)
+    # and loses live properties like .Protocol. -SkipEditionCheck forces a native load so the
+    # config-API objects stay live. (The module wraps Microsoft.Web.Administration, which loads
+    # in-process under CoreCLR.)
     try {
-        Import-Module IISAdministration -WarningAction SilentlyContinue -ErrorAction Stop
+        Import-Module IISAdministration -SkipEditionCheck -WarningAction SilentlyContinue -ErrorAction Stop
     } catch {
         $script:IISLoadError = $_.Exception.Message
         return
@@ -858,9 +882,29 @@ function Initialize-IIS {
     # Secondary: WebAdministration for Get-Website / New-WebAppPool / New-WebBinding
     # (cmdlet-level proxies work through WinPSCompat; we just don't use the IIS:\ drive).
     try {
-        Import-Module WebAdministration -WarningAction SilentlyContinue -ErrorAction Stop
+        Import-Module WebAdministration -SkipEditionCheck -WarningAction SilentlyContinue -ErrorAction Stop
     } catch {
         $script:IISLoadError = "IISAdministration loaded but WebAdministration failed: $($_.Exception.Message)"
+        return
+    }
+
+    # STAB-022 guard: prove the config API returns LIVE objects, not WinPSCompat-deserialized
+    # ones. If a host still routes IISAdministration through the compat session (e.g. the
+    # native assembly genuinely cannot load), fail here with an actionable message instead of
+    # letting the cryptic "Cannot bind parameter 'ConfigElement'" surface deep in app-pool
+    # configuration. The 'sites' section always exists, so this is a safe read-only probe.
+    try {
+        $probeSection = Get-IISConfigSection -SectionPath 'system.applicationHost/sites' -ErrorAction Stop
+        if (Test-IsDeserializedObject -InputObject $probeSection) {
+            $script:IISLoadError = "IISAdministration loaded via the Windows PowerShell compatibility (WinPSCompat) session, " +
+                "so its configuration objects are deserialized and cannot be used to configure IIS. " +
+                "Run the installer from an elevated PowerShell 7 session where IISAdministration loads natively, " +
+                "or update the IISAdministration module (Install-Module IISAdministration -Scope AllUsers). " +
+                "Diagnose with deploy\Test-PS7Iis.ps1."
+            return
+        }
+    } catch {
+        $script:IISLoadError = "IISAdministration config API probe failed: $($_.Exception.Message)"
         return
     }
 
