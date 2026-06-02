@@ -8,7 +8,9 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(nothing yet)
+### Changed
+
+- **Dependency updates.** NuGet: `Microsoft.NET.Test.Sdk` 17.14 → 18.6, the `Microsoft.Extensions.*` / `System.DirectoryServices.*` family → 10.0.8, `MailKit` 4.16 → 4.17, `coverlet.msbuild` 10.0.0 → 10.0.1. npm (minor+patch): `react`/`react-dom` 19.2.7, `vite` 8.0.16, `vitest`/`@vitest/coverage-v8` 4.1.8, `playwright` 1.60, `jsdom`, `typescript-eslint`, `@vitejs/plugin-react`, `@types/react`. Backend 351 tests + frontend 57 tests green; 0 npm vulnerabilities. *(deps)*
 
 ---
 
