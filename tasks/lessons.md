@@ -898,3 +898,48 @@ module and gets cryptic parameter-binding failures, first check the object's
 `PSObject.TypeNames[0]` for a `Deserialized.` prefix. If present, force native load
 with `-SkipEditionCheck` and verify with a live-object probe. `deploy/Test-PS7Iis.ps1`
 now carries that probe as the decisive diagnostic.
+
+> **CORRECTION (see STAB-023 below):** `-SkipEditionCheck` was the WRONG fix and
+> caused a regression. It does NOT make a Framework-only / PSSnapIn module load
+> natively — for `WebAdministration` it throws `Could not load type
+> 'System.Management.Automation.PSSnapIn'` under CoreCLR. The real fix is to drop the
+> modules entirely and use the underlying .NET API. Read STAB-023.
+
+---
+
+## 2026-06-02 — Don't fight WinPSCompat; use the .NET API the module wraps (STAB-023)
+
+**What happened:** v2.0.3 "fixed" the deserialized-IIS-object bug (STAB-022) by adding
+`-SkipEditionCheck` to `Import-Module IISAdministration` AND `Import-Module
+WebAdministration`. On the user's host this REGRESSED: `Import-Module WebAdministration
+-SkipEditionCheck` throws `Could not load type 'System.Management.Automation.PSSnapIn'
+from assembly 'System.Management.Automation, Version=7.6.0.500'` → Initialize-IIS fails →
+"required PowerShell modules could not be loaded."
+
+**Why -SkipEditionCheck was wrong:** it only SUPPRESSES the CompatiblePSEditions gate; it
+does not make an assembly CoreCLR-compatible. `WebAdministration` is a legacy **PSSnapIn**
+module — `PSSnapIn` is a type that does not exist in PowerShell 7's runtime — so forcing
+an in-process load is guaranteed to throw. WinPSCompat exists precisely because these
+modules can ONLY run in the .NET Framework host. You cannot `-SkipEditionCheck` your way
+out of that.
+
+**The correct fix:** stop using the PowerShell modules altogether. `IISAdministration`/
+`WebAdministration` are thin wrappers over `Microsoft.Web.Administration.dll`
+(`$env:windir\system32\inetsrv\Microsoft.Web.Administration.dll`). That assembly is plain
+.NET and loads **in-process under CoreCLR** via `Add-Type -Path …`. Drive IIS through
+`[Microsoft.Web.Administration.ServerManager]::new()` — live objects, no module, no compat
+session, no deserialization, works on every host. `CommitChanges()` replaces
+`Start/Stop-IISCommitDelay`; get a fresh ServerManager per operation (a handle is stale
+after commit) and `Dispose()` it.
+
+**General principle:** when a Windows-only PowerShell module misbehaves under PS7
+(deserialization, edition gates, PSSnapIn errors), look for the **.NET assembly it wraps**
+and call that directly via `Add-Type`. The cmdlets are convenience over a .NET API that
+is almost always CoreCLR-loadable in-process. This sidesteps the entire WinPSCompat
+problem class instead of fighting it flag-by-flag.
+
+**Process note:** I shipped STAB-022 without a live-IIS dogfood and recorded a confident-
+but-wrong lesson. The user's two manual probes (`Import-Module WebAdministration` warning;
+the `-SkipEditionCheck` PSSnapIn throw) were what actually pinned the root cause. For
+host-environment-dependent fixes I cannot reproduce locally, get the diagnostic output
+BEFORE concluding — and hold the tag until the user confirms on the affected host.
