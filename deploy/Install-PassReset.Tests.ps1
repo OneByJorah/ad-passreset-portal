@@ -665,3 +665,16 @@ Describe 'Install-PassReset: Initialize-IIS loads the Microsoft.Web.Administrati
         $script:Src | Should -Match 'Microsoft\.Web\.Administration\.ServerManager'
     }
 }
+
+Describe 'Install-PassReset: Sites.Add uses the (name, physicalPath, int port) overload [STAB-026]' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    # The 3-string form Sites.Add(name, "*:port:", physicalPath) does NOT exist; PowerShell
+    # resolved it to Add(name, physicalPath, int port) and threw "Cannot convert ...
+    # 'C:\inetpub\PassReset' ... to type System.Int32". The [int] cast pins the right overload.
+    It 'casts the port argument to [int] so the correct overload is selected' {
+        $script:Src | Should -Match '\$sm\.Sites\.Add\(\$SiteName,\s*\$PhysicalPath,\s*\[int\]\$selectedHttpPort\)'
+    }
+    It 'does not pass a "*:port:" binding string as a positional arg to Sites.Add' {
+        $script:Src | Should -Not -Match '\$sm\.Sites\.Add\(\$SiteName,\s*"\*:'
+    }
+}

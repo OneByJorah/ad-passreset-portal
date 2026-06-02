@@ -1638,9 +1638,14 @@ if (-not $siteExists -and $selectedHttpPort -eq 80) {
 $sm = Get-PassResetServerManager
 try {
     if (-not $siteExists) {
-        # Create with a placeholder HTTP binding on the resolved port; the root application
-        # and its '/' virtual directory are created by Sites.Add with the physical path.
-        $site = $sm.Sites.Add($SiteName, "*:${selectedHttpPort}:", $PhysicalPath)
+        # Create with an HTTP binding on the resolved port. Use the unambiguous
+        # SiteCollection.Add(string name, string physicalPath, int port) overload — NOT a
+        # 3-string form (which does not exist). Passing ("*:port:", physicalPath) made
+        # PowerShell bind physicalPath to the int 'port' parameter and throw
+        # "Cannot convert ... 'C:\inetpub\PassReset' ... to type System.Int32". The int cast
+        # pins the correct overload. This creates the site, its root application, root vdir,
+        # and the *:port: http binding in one call.
+        $site = $sm.Sites.Add($SiteName, $PhysicalPath, [int]$selectedHttpPort)
         $site.Applications['/'].ApplicationPoolName = $AppPoolName
         $sm.CommitChanges()
         Write-Ok "Created site $SiteName (HTTP :$selectedHttpPort placeholder)"
