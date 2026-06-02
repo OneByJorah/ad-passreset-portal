@@ -387,13 +387,15 @@ Describe 'Install-PassReset: STAB-001 HTTP redirect binding uses resolved port' 
         $tokens = $null; $errs = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile(
             $scriptPath, [ref]$tokens, [ref]$errs)
-        # Isolate the HTTP-binding creation statements: the New-IISSiteBinding call
-        # for protocol http that retains the redirect binding.
+        # STAB-023: HTTP redirect binding is now created via $site.Bindings.Add(...) on the
+        # live ServerManager object. Isolate the InvokeMemberExpression for Bindings.Add
+        # whose first argument is an http binding-information string ("*:<port>:").
         $httpBindingCalls = $ast.FindAll({
             param($n)
-            $n -is [System.Management.Automation.Language.CommandAst] -and
-            $n.GetCommandName() -eq 'New-IISSiteBinding' -and
-            $n.Extent.Text -match '-Protocol http\b'
+            $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+            $n.Member.Extent.Text -eq 'Add' -and
+            $n.Expression.Extent.Text -match 'Bindings$' -and
+            $n.Extent.Text -match "'http'"
         }, $true)
         $script:HttpBindingText = ($httpBindingCalls | ForEach-Object { $_.Extent.Text }) -join "`n"
     }
@@ -664,15 +666,24 @@ Describe 'Install-PassReset: Test-IsDeserializedObject' {
     }
 }
 
-Describe 'Install-PassReset: Initialize-IIS forces native IISAdministration load' {
+Describe 'Install-PassReset: Initialize-IIS loads the Microsoft.Web.Administration assembly' {
     BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
-    It 'imports IISAdministration with -SkipEditionCheck (native, not WinPSCompat)' {
-        $script:Src | Should -Match 'Import-Module IISAdministration[^\r\n]*-SkipEditionCheck'
+    # STAB-023: Initialize-IIS now Add-Type's the ServerManager assembly in-process
+    # instead of Import-Module'ing the IISAdministration / WebAdministration modules
+    # (which deserialize their config objects under WinPSCompat on PS 7 hosts).
+    It 'loads the IIS assembly via Add-Type -Path' {
+        $script:Src | Should -Match 'Add-Type\s+-Path'
     }
-    It 'guards against a deserialized config section via Test-IsDeserializedObject' {
-        $script:Src | Should -Match 'Test-IsDeserializedObject'
+    It 'references Microsoft.Web.Administration.dll as the assembly to load' {
+        $script:Src | Should -Match 'Microsoft\.Web\.Administration\.dll'
     }
-    It 'surfaces an actionable error mentioning WinPSCompat/compatibility when objects are deserialized' {
-        $script:Src | Should -Match '(?i)compat'
+    It 'does NOT Import-Module IISAdministration (module path removed)' {
+        $script:Src | Should -Not -Match 'Import-Module\s+IISAdministration'
+    }
+    It 'does NOT Import-Module WebAdministration (module path removed)' {
+        $script:Src | Should -Not -Match 'Import-Module\s+WebAdministration'
+    }
+    It 'uses the ServerManager .NET type to drive IIS' {
+        $script:Src | Should -Match 'Microsoft\.Web\.Administration\.ServerManager'
     }
 }

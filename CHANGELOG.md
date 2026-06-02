@@ -12,6 +12,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.0.4] — 2026-06-02
+
+Patch release. Replaces the IIS PowerShell-module dependency with the `Microsoft.Web.Administration.ServerManager` .NET API, fixing installer failures on PowerShell 7 hosts where those modules load through the Windows PowerShell compatibility session.
+
+### Fixed
+
+- **Installer failed in IIS hosting mode with "required PowerShell modules could not be loaded"** (a v2.0.3 regression) and, before that, with `Get-IISConfigCollection: Cannot bind parameter 'ConfigElement' … Deserialized.Microsoft.Web.Administration.ConfigurationSection` (v2.0.2). Root cause: the installer drove IIS through the `IISAdministration`/`WebAdministration` cmdlets, which on PowerShell 7 load via the WinPSCompat implicit-remoting session and return inert `Deserialized.*` config objects. The 2.0.3 attempt to force a native load (`-SkipEditionCheck`) made it worse — `WebAdministration` is a PSSnapIn-based module and threw `Could not load type 'System.Management.Automation.PSSnapIn'` under CoreCLR. **The installer now loads `Microsoft.Web.Administration.dll` in-process via `Add-Type` and drives IIS entirely through the `ServerManager` .NET API** — no IIS PowerShell modules, no compatibility session, no deserialization — so app-pool, site, binding, and environment-variable provisioning work on every host regardless of module edition. App-pool identity preservation (BUG-003), STAB-001 resolved-port binding, secret handling, and Service/Console modes are unchanged. `deploy/Test-PS7Iis.ps1` now probes the ServerManager path directly. *(installer)*
+
 ## [2.0.3] — 2026-06-02
 
 Patch release. Fixes a PowerShell 7 installer failure on hosts where `IISAdministration` loads via the Windows PowerShell compatibility session, plus routine dependency updates. No application code changes.

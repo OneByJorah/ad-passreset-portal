@@ -67,45 +67,47 @@ Probe 'Get-Item IIS:\AppPools\DefaultAppPool' {
     $p.Name
 }
 
-Heading 'IISAdministration (modern)'
-Probe 'Module available' {
-    [bool](Get-Module IISAdministration -ListAvailable)
+Heading 'ServerManager .NET API (what the installer uses — STAB-023)'
+# STAB-023: the installer no longer imports IISAdministration/WebAdministration.
+# It loads Microsoft.Web.Administration.dll in-process via Add-Type and drives IIS
+# through the ServerManager .NET API — no module, no WinPSCompat, no deserialization.
+# These probes mirror exactly what Install-PassReset.ps1 does, so OK here == install works.
+$script:mwaPath = Join-Path $env:windir 'system32\inetsrv\Microsoft.Web.Administration.dll'
+Probe 'Microsoft.Web.Administration.dll present' {
+    if (Test-Path $script:mwaPath) { $script:mwaPath } else { $false }
 }
-Probe 'Import native (-SkipEditionCheck, as the installer does)' {
-    Remove-Module IISAdministration -ErrorAction SilentlyContinue
-    $warnings = $null
-    Import-Module IISAdministration -SkipEditionCheck -WarningVariable warnings -WarningAction SilentlyContinue -ErrorAction Stop
-    if ($warnings) { "imported with warnings: $($warnings -join '; ')" } else { 'imported cleanly' }
+Probe 'Add-Type loads the assembly in-process (CoreCLR)' {
+    Add-Type -Path $script:mwaPath -ErrorAction Stop
+    'loaded'
 }
-Probe 'Get-IISAppPool command available' {
-    [bool](Get-Command Get-IISAppPool -ErrorAction SilentlyContinue)
+Probe 'New ServerManager + read application pools (LIVE objects)' {
+    $sm = [Microsoft.Web.Administration.ServerManager]::new()
+    try {
+        $pools = @($sm.ApplicationPools | ForEach-Object { $_.Name })
+        "$($pools.Count) pool(s): $($pools -join ', ')"
+    } finally { $sm.Dispose() }
 }
-Probe 'Get-IISAppPool returns DefaultAppPool' {
-    $p = Get-IISAppPool -Name DefaultAppPool -ErrorAction Stop
-    "$($p.Name) (state: $($p.State))"
-}
-Probe 'Get-IISSite returns something' {
-    $sites = Get-IISSite -ErrorAction Stop
-    "$($sites.Count) site(s): $($sites.Name -join ', ')"
-}
-Probe 'Get-IISServerManager callable' {
-    $sm = Get-IISServerManager
-    if ($sm) { $sm.GetType().FullName } else { $false }
-}
-# STAB-022: the decisive probe. If the config section comes back as a
-# "Deserialized.*" type, IISAdministration is routing through WinPSCompat and the
-# installer's Get-IISConfigCollection / $_.Protocol calls will FAIL. This must be live.
-Probe 'Config section is LIVE (not Deserialized.* — STAB-022)' {
-    $section = Get-IISConfigSection -SectionPath 'system.applicationHost/sites' -ErrorAction Stop
-    $typeName = @($section.PSObject.TypeNames)[0]
-    if ($typeName -like 'Deserialized.*') {
-        throw "DESERIALIZED ($typeName) — IISAdministration loaded via WinPSCompat; install will fail. Update IISAdministration or run in a session where it loads natively."
-    }
-    "live: $typeName"
+Probe 'ServerManager reads sites + bindings (LIVE — no Deserialized.*)' {
+    $sm = [Microsoft.Web.Administration.ServerManager]::new()
+    try {
+        $sites = @($sm.Sites)
+        $typeName = if ($sites.Count -gt 0) { @($sites[0].PSObject.TypeNames)[0] } else { '(no sites)' }
+        if ($typeName -like 'Deserialized.*') {
+            throw "DESERIALIZED ($typeName) — unexpected for a .NET object; report this."
+        }
+        $b = @($sm.Sites | ForEach-Object { $_.Bindings } | ForEach-Object { $_.BindingInformation })
+        "sites=$($sites.Count), bindings=$($b.Count), site type: $typeName"
+    } finally { $sm.Dispose() }
 }
 
-Heading 'Compatibility session check'
-Probe 'WinPSCompat session present' {
+Heading 'Legacy module check (informational only — installer no longer uses these)'
+Probe 'WebAdministration loads via WinPSCompat (expected; informational)' {
+    Remove-Module WebAdministration -ErrorAction SilentlyContinue
+    $warnings = $null
+    Import-Module WebAdministration -WarningVariable warnings -WarningAction SilentlyContinue -ErrorAction Stop
+    if ($warnings) { "compat warnings (harmless now): $($warnings -join '; ')" } else { 'imported cleanly' }
+}
+Probe 'WinPSCompat session present (informational)' {
     $s = Get-PSSession -Name 'WinPSCompatSession' -ErrorAction SilentlyContinue
     if ($s) { "$($s.State) on $($s.ComputerName)" } else { $false }
 }
@@ -113,8 +115,9 @@ Probe 'WinPSCompat session present' {
 Heading 'Summary'
 Write-Host ""
 Write-Host "Paste the full output above into the GitHub issue for PassReset."
-Write-Host "Expected outcome: IISAdministration loads natively (no compat session),"
-Write-Host "the 'Config section is LIVE' probe is OK (not Deserialized.*), and Get-IISAppPool works."
-Write-Host "If 'Config section is LIVE' shows DESERIALIZED, the install will fail (STAB-022) —"
-Write-Host "update the IISAdministration module (Install-Module IISAdministration -Scope AllUsers)."
+Write-Host "Expected (STAB-023): the 'ServerManager .NET API' probes are all OK —"
+Write-Host "the dll loads via Add-Type and ServerManager reads pools/sites/bindings as LIVE objects."
+Write-Host "If those are OK, the v2.0.4 installer will work regardless of how the legacy"
+Write-Host "IIS modules load. The 'Legacy module check' section is informational only —"
+Write-Host "WebAdministration loading via WinPSCompat is fine; the installer no longer uses it."
 Write-Host ""
