@@ -129,8 +129,10 @@ jobs:
       - name: PSScriptAnalyzer
         shell: pwsh
         run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -ErrorAction Stop
+          # Trusting PSGallery is best-effort: on some runners the legacy PowerShellGet
+          # Set-PSRepository throws (PSResourceGet is default), which must not fail the job.
+          try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch { Write-Host "Set-PSRepository skipped: $($_.Exception.Message)" }
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -Repository PSGallery -ErrorAction Stop
           $results = Invoke-ScriptAnalyzer -Path deploy -Recurse `
             -Severity @('Error','Warning') `
             -ExcludeRule @('PSAvoidUsingWriteHost','PSUseShouldProcessForStateChangingFunctions','PSReviewUnusedParameter')
@@ -146,8 +148,8 @@ jobs:
       - name: Pester (installer + uninstaller suites)
         shell: pwsh
         run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
+          try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch { Write-Host "Set-PSRepository skipped: $($_.Exception.Message)" }
+          Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck -Repository PSGallery
           $cfg = New-PesterConfiguration
           $cfg.Run.Path = @('deploy/Install-PassReset.Tests.ps1','deploy/Uninstall-PassReset.Tests.ps1')
           $cfg.Output.Verbosity = 'Detailed'
