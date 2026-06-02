@@ -34,8 +34,14 @@ Describe 'Uninstall-PassReset: -KeepFiles guards file removal' {
 }
 
 Describe 'Uninstall-PassReset: IIS + service removal present' {
-    It 'removes the IIS site'      { $script:Src | Should -Match 'Remove-Website -Name \$SiteName' }
-    It 'removes the app pool'      { $script:Src | Should -Match 'Remove-WebAppPool -Name \$AppPoolName' }
+    # STAB-025: IIS removal now uses the ServerManager .NET API (not WebAdministration
+    # cmdlets, which return Deserialized.* objects under WinPSCompat on PS 7).
+    It 'loads the Microsoft.Web.Administration assembly' { $script:Src | Should -Match 'Add-Type -Path \$mwaPath' }
+    It 'removes the IIS site via ServerManager'  { $script:Src | Should -Match '\$sm\.Sites\.Remove\(' }
+    It 'removes the app pool via ServerManager'  { $script:Src | Should -Match '\$sm\.ApplicationPools\.Remove\(' }
+    It 'does not use the WinPSCompat WebAdministration cmdlets' {
+        $script:Src | Should -Not -Match '(Remove|Stop|Get)-Web(site|AppPool)'
+    }
     It 'removes the Windows service' { $script:Src | Should -Match 'sc\.exe delete \$SiteName' }
 }
 

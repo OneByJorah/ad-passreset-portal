@@ -12,6 +12,19 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.0.5] — 2026-06-02
+
+Patch release. Fixes two installer/uninstaller defects found while deploying 2.0.4, plus code-review hardening.
+
+### Fixed
+
+- **Upgrades failed the post-deploy health check against a stopped site.** The "Verifying deployment" step ran *before* the app pool and site were started (and before NTFS permissions and secret environment variables were set) — but the installer stops the pool/site earlier to release file locks during the file copy. So on every upgrade the health check hit a stopped site and failed. Post-deploy verification now runs **last**, after the app is fully configured and started. *(installer, STAB-024)*
+- **`Uninstall-PassReset.ps1` silently did nothing on PowerShell 7 hosts.** It detected the IIS site/pool via the `IIS:\` PSDrive and removed them with the `WebAdministration` cmdlets — but on PS7 that drive is not proxied through the WinPSCompat session (so detection returned `$false` and the uninstaller no-opped), and the cmdlets return deserialized objects. The uninstaller now uses the same `Microsoft.Web.Administration.ServerManager` .NET API as the installer (`Add-Type` + live objects), so site/pool removal works on every host. *(installer, STAB-025)*
+
+### Changed
+
+- Installer hardening from code review: null-guard the app-pool/site handles in the start/state-check path so a missing object yields a clear error instead of a misleading null-method exception under StrictMode; removed the now-unused `Test-IsDeserializedObject` helper (the ServerManager approach has no deserialization to detect). *(installer)*
+
 ## [2.0.4] — 2026-06-02
 
 Patch release. Replaces the IIS PowerShell-module dependency with the `Microsoft.Web.Administration.ServerManager` .NET API, fixing installer failures on PowerShell 7 hosts where those modules load through the Windows PowerShell compatibility session.

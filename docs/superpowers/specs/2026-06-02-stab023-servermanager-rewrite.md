@@ -42,8 +42,9 @@ The DLL is present whenever IIS is installed (it's part of the IIS management st
 - `.ProcessModel.IdentityType` is enum `[Microsoft.Web.Administration.ProcessModelIdentityType]`
   (`ApplicationPoolIdentity`/`SpecificUser`/`LocalSystem`/`NetworkService`/`LocalService`).
   `.ProcessModel.UserName`, `.ProcessModel.Password` (write-only in practice — set, never read back).
-- `$sm.Sites["name"]` / `$sm.Sites.Add(name, protocol, bindingInformation, physicalPath)` (HTTP) —
-  but prefer creating then configuring explicitly for clarity.
+- `$sm.Sites["name"]` / `$sm.Sites.Add(name, bindingInformation, physicalPath)` — the real
+  3-arg HTTP overload (creates the site, its root application, and root vdir). (NOT a 4-arg
+  `(name, protocol, info, path)` form — that does not exist.) Then configure pool/bindings explicitly.
 - `$site.Applications["/"].ApplicationPoolName = "pool"`.
 - `$site.Applications["/"].VirtualDirectories["/"].PhysicalPath = "path"`.
 - `$site.Bindings` — collection. `.Add("*:80:", "http")`. For HTTPS:

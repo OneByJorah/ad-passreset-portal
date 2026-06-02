@@ -644,28 +644,6 @@ Describe 'Install-PassReset: STAB-019 regression guards' {
     }
 }
 
-# ── STAB-022 / 2.0.2 install bug: IISAdministration loaded via WinPSCompat returns
-#    Deserialized.* objects that break Get-IISConfigCollection + $_.Protocol. ────────
-
-Describe 'Install-PassReset: Test-IsDeserializedObject' {
-    It 'returns $true for a Deserialized.* typed object name' {
-        # Synthesize an object whose type name starts with Deserialized. (what WinPSCompat yields).
-        $fake = [pscustomobject]@{ x = 1 }
-        # Re-tag its type name to simulate a WinPSCompat-deserialized object.
-        $fake.PSObject.TypeNames.Insert(0, 'Deserialized.Microsoft.Web.Administration.ConfigurationSection')
-        Test-IsDeserializedObject -InputObject $fake | Should -BeTrue
-    }
-    It 'returns $false for a live local object' {
-        Test-IsDeserializedObject -InputObject ([pscustomobject]@{ x = 1 }) | Should -BeFalse
-    }
-    It 'returns $false for $null (nothing to classify)' {
-        Test-IsDeserializedObject -InputObject $null | Should -BeFalse
-    }
-    It 'returns $false for a plain string' {
-        Test-IsDeserializedObject -InputObject 'system.applicationHost/sites' | Should -BeFalse
-    }
-}
-
 Describe 'Install-PassReset: Initialize-IIS loads the Microsoft.Web.Administration assembly' {
     BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
     # STAB-023: Initialize-IIS now Add-Type's the ServerManager assembly in-process
