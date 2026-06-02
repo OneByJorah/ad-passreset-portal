@@ -28,6 +28,12 @@ export default function AdPasswordPolicyPanel({ policy, loading }: Props) {
   if (policy.historyLength > 0) {
     rules.push(`Cannot reuse last ${policy.historyLength} passwords`);
   }
+  if (policy.minAgeDays > 0) {
+    rules.push(`Minimum age: ${policy.minAgeDays} day(s) before it can be changed again`);
+  }
+  if (policy.maxAgeDays > 0) {
+    rules.push(`Password expires after ${policy.maxAgeDays} days`);
+  }
 
   return (
     <Paper

@@ -27,6 +27,7 @@ public sealed class HealthController : ControllerBase
     private readonly IExpiryServiceDiagnostics _expiryDiagnostics;
     private readonly ILockoutDiagnostics _lockoutDiagnostics;
     private readonly IAdConnectivityProbe _adProbe;
+    private readonly IOptions<HealthCheckSettings> _healthSettings;
     private readonly ILogger<HealthController> _logger;
 
     public HealthController(
@@ -37,6 +38,7 @@ public sealed class HealthController : ControllerBase
         IExpiryServiceDiagnostics expiryDiagnostics,
         ILockoutDiagnostics lockoutDiagnostics,
         IAdConnectivityProbe adProbe,
+        IOptions<HealthCheckSettings> healthSettings,
         ILogger<HealthController> logger)
     {
         _options            = options;
@@ -46,6 +48,7 @@ public sealed class HealthController : ControllerBase
         _expiryDiagnostics  = expiryDiagnostics;
         _lockoutDiagnostics = lockoutDiagnostics;
         _adProbe            = adProbe;
+        _healthSettings     = healthSettings;
         _logger             = logger;
     }
 
@@ -82,6 +85,9 @@ public sealed class HealthController : ControllerBase
 
     private async Task<(string status, long latencyMs, bool skipped)> CheckSmtpAsync()
     {
+        if (_healthSettings.Value.DisableSmtpConnectivityProbe)
+            return ("skipped", 0, true);
+
         var emailEnabled  = _emailNotif.Value.Enabled;
         var expiryEnabled = _expiryNotif.Value.Enabled;
         if (!emailEnabled && !expiryEnabled)
@@ -104,15 +110,33 @@ public sealed class HealthController : ControllerBase
 
     private (string status, long latencyMs) CheckExpiryService()
     {
+        if (_healthSettings.Value.DisableExpiryServiceCheck)
+            return ("skipped", 0);
+
         if (!_expiryDiagnostics.IsEnabled)
             return ("not-enabled", 0);
+
         if (_expiryDiagnostics.LastTickUtc is null)
-            return ("degraded", 0);
+        {
+            // A service enabled but not-yet-run on its first tick is not unhealthy; the
+            // initial null indicates startup lag, not misconfiguration. Within the grace
+            // window (measured from process start) report "healthy" so a fresh deploy
+            // returns 200 for the installer post-deploy check. Past the window with still
+            // no tick, surface "degraded" so a genuinely stuck service is visible.
+            var grace = TimeSpan.FromSeconds(_healthSettings.Value.ExpiryServiceGracePeriodSeconds);
+            var startedUtc = Process.GetCurrentProcess().StartTime.ToUniversalTime();
+            var elapsed = DateTimeOffset.UtcNow - new DateTimeOffset(startedUtc, TimeSpan.Zero);
+            return elapsed <= grace ? ("healthy", 0) : ("degraded", 0);
+        }
+
         return ("healthy", 0);
     }
 
     private async Task<(string status, long latencyMs)> CheckAdConnectivityAsync()
     {
+        if (_healthSettings.Value.DisableAdConnectivityProbe)
+            return ("skipped", 0);
+
         var result = await _adProbe.CheckAsync(HttpContext.RequestAborted);
         var status = result.Status switch
         {

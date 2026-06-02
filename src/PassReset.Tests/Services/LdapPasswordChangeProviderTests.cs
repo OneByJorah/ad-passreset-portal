@@ -566,4 +566,60 @@ public class LdapPasswordChangeProviderTests
 
         Assert.Null(policy);
     }
+
+    [Fact]
+    public async Task GetEffectivePasswordPolicyAsync_ReadsComplexityFromDomainRoot()
+    {
+        var (sut, fake) = Build();
+        fake.RootDse = MakeEntry("",
+            (LdapAttributeNames.MinPwdLength, "8"),
+            ("defaultNamingContext", "DC=corp,DC=example,DC=com"));
+        fake.OnSearch("objectClass=domainDNS",
+            MakeResponse(MakeEntry("DC=corp,DC=example,DC=com",
+                ("pwdProperties", "1"),
+                ("pwdHistoryLength", "24"))));
+
+        var policy = await sut.GetEffectivePasswordPolicyAsync();
+
+        Assert.NotNull(policy);
+        Assert.True(policy!.RequiresComplexity);
+        Assert.Equal(24, policy.HistoryLength);
+    }
+
+    [Fact]
+    public async Task GetEffectivePasswordPolicyAsync_NoComplexityBit_ReportsFalse()
+    {
+        var (sut, fake) = Build();
+        fake.RootDse = MakeEntry("",
+            (LdapAttributeNames.MinPwdLength, "8"),
+            ("defaultNamingContext", "DC=corp,DC=example,DC=com"));
+        fake.OnSearch("objectClass=domainDNS",
+            MakeResponse(MakeEntry("DC=corp,DC=example,DC=com",
+                ("pwdProperties", "0"),
+                ("pwdHistoryLength", "0"))));
+
+        var policy = await sut.GetEffectivePasswordPolicyAsync();
+
+        Assert.NotNull(policy);
+        Assert.False(policy!.RequiresComplexity);
+        Assert.Equal(0, policy.HistoryLength);
+    }
+
+    [Fact]
+    public async Task GetEffectivePasswordPolicyAsync_DomainRootSearchThrows_StillReturnsPolicy()
+    {
+        var (sut, fake) = Build();
+        fake.RootDse = MakeEntry("",
+            (LdapAttributeNames.MinPwdLength, "10"),
+            ("defaultNamingContext", "DC=corp,DC=example,DC=com"));
+        fake.OnSearchThrow("objectClass=domainDNS",
+            new DirectoryOperationException("simulated domain-root failure"));
+
+        var policy = await sut.GetEffectivePasswordPolicyAsync();
+
+        Assert.NotNull(policy);
+        Assert.Equal(10, policy!.MinLength);
+        Assert.False(policy.RequiresComplexity);
+        Assert.Equal(0, policy.HistoryLength);
+    }
 }

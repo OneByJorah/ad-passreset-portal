@@ -62,7 +62,7 @@ Restart-WebAppPool -Name 'PassReset'
 
 **Regression guard:** `ClientSettings.Recaptcha.PrivateKey` is marked `[JsonIgnore]` on the DTO and never appears in `GET /api/password` regardless of whether the value was sourced from `appsettings`, user-secrets, or an env var (proved by `EnvironmentVariableOverrideTests`).
 
-**Operator note:** The installer does NOT set these environment variables (D-18 — operator owns secret injection). Full encrypted-at-rest solutions (DPAPI/Key Vault) are scheduled for v2.0 (V2-003); STAB-017 is the documented stepping stone that unblocks externalizing secrets today without committing to a specific KMS.
+**Operator note:** The installer SUPPORTS setting these environment variables at install time via the `-LdapPassword`, `-SmtpPassword`, and `-RecaptchaPrivateKey` parameters (each a `[SecureString]`), which call `Set-PoolEnvVar` to write the value into the AppPool's `environmentVariables` collection idempotently (existing values are never overwritten). Operators MAY instead inject secrets manually post-install via IIS Manager, `appcmd`, or `dotnet user-secrets` — both paths are valid; the operator owns the choice. Full encrypted-at-rest solutions (DPAPI/Key Vault) are tracked separately (V2-003); STAB-017 is the documented env-var stepping stone.
 
 ## Hardening Options
 

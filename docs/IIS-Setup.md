@@ -72,7 +72,20 @@ If you decline the prompt, the installer prints the exact `dism /online /enable-
 
 Use `-Force` for unattended / CI installs — DISM enable runs without prompting.
 
-The **.NET 10 Hosting Bundle** is **not** auto-installed. If it is missing, the installer prints the Microsoft download URL and exits 0 cleanly — see [Step 2](#step-2--install-the-net-10-hosting-bundle) below, then re-run the installer.
+If the **.NET 10 Hosting Bundle** is missing the installer offers to install it via **winget** (when available). On a host without winget it prints the Microsoft download URL and exits 0 cleanly — see [Step 2](#step-2--install-the-net-10-hosting-bundle) below, then re-run the installer.
+
+### Unattended dependency handling (flags)
+
+| Flag | Effect |
+|------|--------|
+| `-InstallDependencies prompt` | (default) interactive Y/N for missing IIS features and the .NET Hosting Bundle |
+| `-InstallDependencies yes` | auto-install missing IIS features (DISM) and the Hosting Bundle (winget) without prompting |
+| `-InstallDependencies no` | abort cleanly (exit 0) when any prerequisite is missing |
+| `-SkipDependencyCheck` | skip all prerequisite detection (use only on pre-validated hosts) |
+
+`-Force` implies `-InstallDependencies yes`. After installing IIS features the installer
+**re-validates** them; if DISM reports a pending reboot (exit 3010) the installer aborts
+**before** creating the site/app pool — reboot and re-run.
 
 ### Manual fallback (declined Y/N prompt, pre-Windows-Server-2019, or air-gapped builds)
 
@@ -256,6 +269,10 @@ pwsh -File .\deploy\Install-PassReset.ps1 `
 
 # Upgrading an existing installation (unattended — skip confirmation prompt)
 .\deploy\Install-PassReset.ps1 -Force -CertThumbprint "PASTE_THUMBPRINT_HERE"
+
+# Re-configure an existing install (re-apply binding/config without mirroring files)
+# Same-version re-runs auto-detect reconfigure mode; -Reconfigure forces it explicitly:
+.\deploy\Install-PassReset.ps1 -Reconfigure -Force -CertThumbprint "PASTE_THUMBPRINT_HERE"
 ```
 
 The installer:
@@ -268,6 +285,8 @@ The installer:
 - Stores secrets as IIS app pool environment variables (existing values are never overwritten)
 
 **Upgrading:** when an existing PassReset site is detected the installer displays the installed and incoming version numbers, prompts for confirmation, and creates a dated backup of the current deployment (e.g. `C:\inetpub\PassReset_backup_20260327-1430\`) before overwriting. Pass `-Force` to skip the confirmation for unattended deployments.
+
+**Reconfiguring:** re-running the installer with the *same* version already installed is treated as a **reconfigure** — the file mirror is skipped (your existing publish folder is preserved) while the app-pool, binding, and config logic re-run. The final banner reads "PassReset reconfigured successfully." rather than "upgraded". Pass `-Reconfigure` to force this mode explicitly (e.g. to re-apply configuration after editing) even when the incoming version differs.
 
 ---
 
@@ -387,6 +406,12 @@ To prevent this on a fresh install, re-run the installer — it now retains the 
 
 - Set `"EnableHttpsRedirect": false` temporarily to diagnose.
 - Ensure the HTTPS binding has a valid, trusted certificate.
+
+### Reboot pending after DISM
+
+If the installer aborts with "IIS feature installation requires a system reboot
+(DISM exit 3010)", reboot the server and re-run the installer. This is intentional:
+creating the site before the roles finish installing would start the worker without IIS roles present.
 
 ---
 

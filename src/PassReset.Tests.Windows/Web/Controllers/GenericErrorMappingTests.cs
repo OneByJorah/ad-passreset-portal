@@ -37,9 +37,10 @@ public class GenericErrorMappingTests : IDisposable
     public sealed class RecordingSiemService : ISiemService
     {
         public List<SiemEventType> Events { get; } = new();
+        public List<AuditEvent> AuditEvents { get; } = new();
         public void LogEvent(SiemEventType eventType, string username, string ipAddress, string? detail = null)
             => Events.Add(eventType);
-        public void LogEvent(AuditEvent evt) => Events.Add(evt.EventType);
+        public void LogEvent(AuditEvent evt) { Events.Add(evt.EventType); AuditEvents.Add(evt); }
     }
     // Per-test factory disposal keeps rate-limiter partition state isolated and lets
     // individual tests flip the hosting environment without leaking across test methods.
@@ -166,6 +167,33 @@ public class GenericErrorMappingTests : IDisposable
             builder.ConfigureAppConfiguration((_, config) =>
             {
                 config.AddInMemoryCollection(TestConfig());
+            });
+            builder.ConfigureTestServices(services =>
+            {
+                SwapInDebugProvider(services);
+                SwapInRecordingSiem(services, Recorder);
+            });
+        }
+    }
+
+    /// <summary>
+    /// STAB-013 gap closure: Production env + recording SIEM + portal lockout ENABLED
+    /// (PortalLockoutThreshold=3, not 0). Lets tests drive the lockout decorator's
+    /// ApproachingLockout (failure #3) and PortalLockout (failure #4) codes and assert
+    /// they are NOT collapsed to Generic on the wire — they leak only per-account
+    /// throttling state, never directory membership.
+    /// </summary>
+    public sealed class ProductionEnvFactoryWithEnabledLockout : WebApplicationFactory<Program>
+    {
+        public RecordingSiemService Recorder { get; } = new();
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Production");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                var cfg = TestConfig();
+                cfg["PasswordChangeOptions:PortalLockoutThreshold"] = "3"; // enable lockout
+                config.AddInMemoryCollection(cfg);
             });
             builder.ConfigureTestServices(services =>
             {
@@ -313,5 +341,97 @@ public class GenericErrorMappingTests : IDisposable
 
         Assert.Contains(SiemEventType.UserNotFound, factory.Recorder.Events);
         Assert.DoesNotContain(SiemEventType.Generic, factory.Recorder.Events);
+    }
+
+    /// <summary>
+    /// STAB-013 gap closure: with portal lockout enabled, the THIRD invalid-credential
+    /// attempt is upgraded by the decorator to ApproachingLockout. This code is NOT an
+    /// account-enumeration oracle (it reveals only that THIS portal is throttling THIS
+    /// account, not whether the account exists in AD), so it must reach the wire intact
+    /// in Production — and the SIEM must record the granular ApproachingLockout event.
+    /// </summary>
+    [Fact]
+    public async Task Production_ApproachingLockout_WirePreservesCode()
+    {
+        using var factory = new ProductionEnvFactoryWithEnabledLockout();
+        using var client  = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        HttpResponseMessage response = null!;
+        for (int i = 0; i < 3; i++)
+            response = await client.PostAsJsonAsync("/api/password", MakeRequest("invalidCredentials"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.NotNull(result);
+        Assert.Single(result!.Errors);
+        Assert.Equal(ApiErrorCode.ApproachingLockout, result.Errors[0].ErrorCode);
+        Assert.Contains(SiemEventType.ApproachingLockout, factory.Recorder.Events);
+    }
+
+    /// <summary>
+    /// STAB-013 gap closure: the FOURTH invalid-credential attempt is blocked by the
+    /// decorator BEFORE contacting AD and returns PortalLockout. Like ApproachingLockout,
+    /// this is per-account throttling state, not a directory-enumeration vector, so it
+    /// must NOT be collapsed to Generic in Production. SIEM records PortalLockout.
+    /// </summary>
+    [Fact]
+    public async Task Production_PortalLockout_WirePreservesCode()
+    {
+        using var factory = new ProductionEnvFactoryWithEnabledLockout();
+        using var client  = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        HttpResponseMessage response = null!;
+        for (int i = 0; i < 4; i++)
+            response = await client.PostAsJsonAsync("/api/password", MakeRequest("invalidCredentials"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.NotNull(result);
+        Assert.Single(result!.Errors);
+        Assert.Equal(ApiErrorCode.PortalLockout, result.Errors[0].ErrorCode);
+        Assert.Contains(SiemEventType.PortalLockout, factory.Recorder.Events);
+    }
+
+    /// <summary>
+    /// STAB-015: every password-change branch must emit a structured AuditEvent carrying a
+    /// non-empty TraceId so SOC tooling can correlate the failure across logs.
+    /// </summary>
+    [Fact]
+    public async Task Production_InvalidCredentials_EmitsStructuredAuditWithTraceId()
+    {
+        using var factory = new ProductionEnvFactoryWithRecorder();
+        using var client  = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        await client.PostAsJsonAsync("/api/password", MakeRequest("invalidCredentials"));
+
+        var failEvent = factory.Recorder.AuditEvents
+            .FirstOrDefault(e => e.EventType == SiemEventType.InvalidCredentials);
+        Assert.NotNull(failEvent);
+        Assert.False(string.IsNullOrWhiteSpace(failEvent!.TraceId));
+        Assert.DoesNotContain("BrandNewP@ssword123", failEvent.Detail ?? string.Empty);
+        Assert.DoesNotContain("OldPassword1!", failEvent.Detail ?? string.Empty);
+    }
+
+    [Fact]
+    public async Task Post_EmitsPasswordChangeAttemptStarted_AtEntry()
+    {
+        using var factory = new ProductionEnvFactoryWithRecorder();
+        using var client  = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        await client.PostAsJsonAsync("/api/password", MakeRequest("invalidCredentials"));
+
+        Assert.Contains(SiemEventType.PasswordChangeAttemptStarted, factory.Recorder.Events);
     }
 }

@@ -30,6 +30,26 @@ pwsh -Command "Test-Json -Path 'C:\inetpub\PassReset\appsettings.Production.json
 
 ---
 
+## Config sync on upgrade (`-ConfigSync`)
+
+On upgrade, `Install-PassReset.ps1` reconciles your live `appsettings.Production.json`
+against the bundled `appsettings.schema.json`:
+
+| Mode    | Behavior |
+|---------|----------|
+| `Merge` | Adds missing keys from schema defaults; reports obsolete keys (never removed). Existing values are never changed. |
+| `Review`| Prompts before adding each missing key and before removing each obsolete key. |
+| `Diff`  | Dry-run — prints what *would* change, writes nothing, creates no backup. |
+| `None`  | Skips sync. |
+
+**Default:** fresh install → `None`; unattended/`-Force` upgrade → `Merge`; interactive upgrade → prompt.
+
+Before any write, the installer creates `appsettings.Production.json_<timestamp>.bak`
+and a durable `appsettings.Production_sync-<timestamp>.log` next to your config.
+Preview first with `-ConfigSync Diff`.
+
+---
+
 ## Startup validation
 
 Phase 8 introduced fail-fast runtime validation. Every options class is registered via
@@ -331,9 +351,38 @@ A background service that emails users before their password expires. Scans memb
 
 ---
 
+## HealthCheckSettings
+
+Controls the per-dependency probes run by `GET /api/health`. All probes are enabled
+by default. Disabling a probe reports its status as `skipped` and excludes it from the
+aggregate rollup, so a host on a restricted network can keep the endpoint green for the
+dependencies it can actually reach.
+
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `DisableSmtpConnectivityProbe` | bool | `false` | Skip the SMTP TCP probe. Use on hosts where the relay is firewalled off from the web tier but mail still flows from elsewhere. |
+| `DisableExpiryServiceCheck` | bool | `false` | Skip the password-expiry background-service check entirely. |
+| `DisableAdConnectivityProbe` | bool | `false` | Skip the Active Directory reachability probe. Use with care — this hides genuine AD outages from monitoring. |
+| `ExpiryServiceGracePeriodSeconds` | int (>= 0) | `600` | Window after process start during which an enabled-but-not-yet-run expiry service reports `healthy` instead of `degraded`. |
+
+### Fresh-deploy behavior (why `ExpiryServiceGracePeriodSeconds` exists)
+
+When `PasswordExpiryNotificationSettings.Enabled` is `true`, the background service runs
+on a daily schedule and may not have ticked when the installer's post-deploy check calls
+`/api/health` seconds after deployment. A not-yet-run service is **startup lag, not
+misconfiguration**, so within the grace window the expiry check reports `healthy` and the
+endpoint returns `200` — allowing `Install-PassReset.ps1` to confirm a successful deploy.
+After the grace window with still no tick, the check reverts to `degraded` so a genuinely
+stuck service is surfaced to monitoring. Set the window to `0` to treat any not-yet-run
+service as immediately `degraded` (legacy behavior).
+
+---
+
 ## ClientSettings
 
 Controls the UI and frontend behaviour.
+
+> See [Password Policy](Password-Policy.md) for what the `ShowAdPasswordPolicy` panel displays and the provider/FGPP limitations.
 
 ```json
 "ClientSettings": {
@@ -540,6 +589,8 @@ When the built-in password generator writes a generated password to the clipboar
 ## SiemSettings
 
 Forwards security events to a SIEM via RFC 5424 syslog and/or email alerts. Both channels are opt-in; all keys are optional.
+
+> See [Audit Events](Audit-Events.md) for the full event-type and field reference.
 
 ```json
 "SiemSettings": {

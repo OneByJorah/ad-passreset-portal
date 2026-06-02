@@ -15,8 +15,32 @@ jobs:
     # integration-tests-ldap job needs SAMBA_* secrets to run.
     secrets: inherit
 
+  powershell-quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Parse-check all deploy/*.ps1
+        shell: pwsh
+        run: |
+          $bad = @()
+          Get-ChildItem deploy -Filter *.ps1 | ForEach-Object {
+            $t = $null; $e = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$t, [ref]$e) | Out-Null
+            if ($e.Count -gt 0) { $bad += $_.Name }
+          }
+          if ($bad.Count -gt 0) { Write-Error "Parse errors in: $($bad -join ', ')"; exit 1 }
+      - name: Pester (installer + uninstaller suites)
+        shell: pwsh
+        run: |
+          try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch { Write-Host "Set-PSRepository skipped: $($_.Exception.Message)" }
+          Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck -Repository PSGallery
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path = @('deploy/Install-PassReset.Tests.ps1','deploy/Uninstall-PassReset.Tests.ps1')
+          $cfg.Run.Exit = $true
+          Invoke-Pester -Configuration $cfg
+
   release:
-    needs: tests
+    needs: [tests, powershell-quality]
     runs-on: windows-latest
     permissions:
       contents: write

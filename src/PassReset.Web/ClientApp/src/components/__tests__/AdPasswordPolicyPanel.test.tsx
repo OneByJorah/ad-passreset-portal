@@ -101,6 +101,24 @@ describe('AdPasswordPolicyPanel', () => {
     expect(container.firstChild).not.toBeNull();
   });
 
+  it('renders minimum age when minAgeDays > 0 (renders_minAgeDays_when_greater_than_zero)', () => {
+    render(<AdPasswordPolicyPanel policy={{ ...samplePolicy, minAgeDays: 1, maxAgeDays: 0 }} loading={false} />);
+    expect(screen.getByText(/minimum age/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 day/i)).toBeInTheDocument();
+  });
+
+  it('renders expiry when maxAgeDays > 0 (renders_maxAgeDays_when_greater_than_zero)', () => {
+    render(<AdPasswordPolicyPanel policy={{ ...samplePolicy, minAgeDays: 0, maxAgeDays: 90 }} loading={false} />);
+    expect(screen.getByText(/expires/i)).toBeInTheDocument();
+    expect(screen.getByText(/90/)).toBeInTheDocument();
+  });
+
+  it('hides age constraints when both are zero (hides_age_constraints_when_zero)', () => {
+    render(<AdPasswordPolicyPanel policy={{ ...samplePolicy, minAgeDays: 0, maxAgeDays: 0 }} loading={false} />);
+    expect(screen.queryByText(/minimum age/i)).toBeNull();
+    expect(screen.queryByText(/expires/i)).toBeNull();
+  });
+
   it('hides the panel once loading resolves with no policy payload', async () => {
     mockPolicyFetch(null);
     render(

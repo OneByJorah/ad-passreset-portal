@@ -29,21 +29,11 @@ public sealed class PasswordController : ControllerBase
     private readonly PasswordChangeOptions _passwordOptions;
     private readonly IHostEnvironment _hostEnvironment;
     private readonly ILogger<PasswordController> _logger;
+    private readonly HttpClient _recaptchaHttp;
 
     // Pre-compiled 5-char hex regex for pwned-check prefix validation.
     private static readonly Regex Sha1PrefixRegex =
         new("^[a-fA-F0-9]{5}$", RegexOptions.Compiled);
-
-    // Static HttpClient for reCAPTCHA v3 verification — avoids socket exhaustion.
-    // PooledConnectionLifetime ensures DNS changes are respected without restarting the process.
-    private static readonly HttpClient _recaptchaHttp = new(new SocketsHttpHandler
-    {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(10),
-    })
-    {
-        BaseAddress = new Uri("https://www.google.com/"),
-        Timeout     = TimeSpan.FromSeconds(10),
-    };
 
     public PasswordController(
         IPasswordChangeProvider provider,
@@ -55,6 +45,7 @@ public sealed class PasswordController : ControllerBase
         IPwnedPasswordChecker pwnedChecker,
         IOptions<PasswordChangeOptions> passwordOptions,
         IHostEnvironment hostEnvironment,
+        IHttpClientFactory httpClientFactory,
         ILogger<PasswordController> logger)
     {
         _provider           = provider;
@@ -67,6 +58,7 @@ public sealed class PasswordController : ControllerBase
         _passwordOptions    = passwordOptions.Value;
         _hostEnvironment    = hostEnvironment;
         _logger             = logger;
+        _recaptchaHttp      = httpClientFactory.CreateClient("recaptcha");
     }
 
     /// <summary>
@@ -148,6 +140,8 @@ public sealed class PasswordController : ControllerBase
     public async Task<IActionResult> PostAsync([FromBody] ChangePasswordModel model)
     {
         var clientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        Audit("AttemptStarted", model.Username, clientIp, SiemEventType.PasswordChangeAttemptStarted);
 
         if (!ModelState.IsValid)
         {
@@ -239,7 +233,16 @@ public sealed class PasswordController : ControllerBase
             outcome, username, clientIp);
 
         if (siemEvent.HasValue)
-            _siemService.LogEvent(siemEvent.Value, username, clientIp, detail);
+        {
+            var traceId = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? "unknown";
+            _siemService.LogEvent(new AuditEvent(
+                EventType: siemEvent.Value,
+                Outcome:   outcome,
+                Username:  username,
+                ClientIp:  clientIp,
+                TraceId:   traceId,
+                Detail:    detail));
+        }
     }
 
     private static SiemEventType MapErrorCodeToSiemEvent(ApiErrorCode code) => code switch
@@ -252,7 +255,17 @@ public sealed class PasswordController : ControllerBase
         _                                => SiemEventType.Generic,
     };
 
-    /// <summary>STAB-013 D-01: account-enumeration codes that must collapse to Generic on the wire in Production.</summary>
+    /// <summary>
+    /// STAB-013 D-01: account-enumeration codes that MUST collapse to Generic on the wire
+    /// in Production. <see cref="ApiErrorCode.InvalidCredentials"/> and
+    /// <see cref="ApiErrorCode.UserNotFound"/> leak whether a username exists in AD, so they
+    /// are redacted. Deliberately EXCLUDED: <see cref="ApiErrorCode.ApproachingLockout"/> and
+    /// <see cref="ApiErrorCode.PortalLockout"/> — these leak only per-account portal-throttling
+    /// state (this portal is rate-limiting this account), never directory membership, so they
+    /// are safe to expose and are NOT an enumeration vector. SIEM granularity is preserved
+    /// independently (D-05); see GenericErrorMappingTests.Production_ApproachingLockout_*
+    /// / Production_PortalLockout_* for the regression guard.
+    /// </summary>
     private static bool IsAccountEnumerationCode(ApiErrorCode code) =>
         code is ApiErrorCode.InvalidCredentials or ApiErrorCode.UserNotFound;
 

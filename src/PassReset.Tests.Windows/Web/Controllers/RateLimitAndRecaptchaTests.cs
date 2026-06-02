@@ -1,9 +1,12 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using PassReset.Common;
 using PassReset.Web.Models;
 
@@ -52,6 +55,17 @@ public class RateLimitAndRecaptchaTests
         Recaptcha         = string.Empty,
     };
 
+    [Fact]
+    public void Recaptcha_NamedHttpClient_IsRegistered()
+    {
+        using var factory = new RateLimitFactory();
+        var clientFactory = factory.Services
+            .GetRequiredService<System.Net.Http.IHttpClientFactory>();
+        var client = clientFactory.CreateClient("recaptcha");
+        Assert.Equal(new Uri("https://www.google.com/"), client.BaseAddress);
+        Assert.Equal(TimeSpan.FromSeconds(10), client.Timeout);
+    }
+
     /// <summary>
     /// Default fixture — debug provider + reCAPTCHA disabled. Matches
     /// <c>PasswordControllerTests.DebugFactory</c> so rate-limit tests exercise
@@ -77,6 +91,52 @@ public class RateLimitAndRecaptchaTests
                     ["PasswordChangeOptions:PortalLockoutThreshold"] = "0",
                     ["PasswordChangeOptions:UseAutomaticContext"]    = "true",
                 });
+            });
+        }
+    }
+
+    /// <summary>
+    /// STAB-015: test-double SIEM recorder. The rate-limiter OnRejected path uses the legacy
+    /// <c>LogEvent(SiemEventType,...)</c> overload, so both overloads capture the event type.
+    /// </summary>
+    internal sealed class RecordingSiem : PassReset.Web.Services.ISiemService
+    {
+        public List<PassReset.Web.Services.SiemEventType> Events { get; } = new();
+        public void LogEvent(PassReset.Web.Services.SiemEventType eventType, string username, string ipAddress, string? detail = null) => Events.Add(eventType);
+        public void LogEvent(PassReset.Web.Services.AuditEvent evt) => Events.Add(evt.EventType);
+    }
+
+    /// <summary>
+    /// STAB-015: default rate-limit fixture with the SIEM service swapped for a recorder so
+    /// the 429 rejection's <c>RateLimitExceeded</c> emission is observable.
+    /// </summary>
+    public sealed class RecordingRateLimitFactory : WebApplicationFactory<Program>
+    {
+        internal RecordingSiem Recorder { get; } = new();
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                 = "true",
+                    ["WebSettings:EnableHttpsRedirect"]              = "false",
+                    ["ClientSettings:MinimumDistance"]               = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]             = "false",
+                    ["EmailNotificationSettings:Enabled"]            = "false",
+                    ["PasswordExpiryNotificationSettings:Enabled"]   = "false",
+                    ["SiemSettings:Syslog:Enabled"]                  = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]              = "false",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"] = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]    = "true",
+                });
+            });
+            builder.ConfigureTestServices(services =>
+            {
+                var existing = services.Where(d => d.ServiceType == typeof(PassReset.Web.Services.ISiemService)).ToList();
+                foreach (var d in existing) services.Remove(d);
+                services.AddSingleton<PassReset.Web.Services.ISiemService>(Recorder);
             });
         }
     }
@@ -116,6 +176,72 @@ public class RateLimitAndRecaptchaTests
         }
     }
 
+    /// <summary>
+    /// STAB-014: scriptable HttpMessageHandler so reCAPTCHA verification can be driven to
+    /// any siteverify outcome (low score, HTTP 500, network throw) without hitting Google.
+    /// </summary>
+    private sealed class StubRecaptchaHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+        public StubRecaptchaHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
+            => _responder = responder;
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(_responder(request));
+    }
+
+    /// <summary>
+    /// reCAPTCHA enabled, with the named "recaptcha" HttpClient's primary handler swapped
+    /// for a scripted stub. FailOpenOnUnavailable defaults to the supplied value.
+    /// </summary>
+    private sealed class StubbedRecaptchaFactory : WebApplicationFactory<Program>
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+        private readonly bool _failOpen;
+        public StubbedRecaptchaFactory(
+            Func<HttpRequestMessage, HttpResponseMessage> responder, bool failOpen)
+        {
+            _responder = responder;
+            _failOpen  = failOpen;
+        }
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                   = "true",
+                    ["WebSettings:EnableHttpsRedirect"]                = "false",
+                    ["ClientSettings:MinimumDistance"]                 = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]               = "true",
+                    ["ClientSettings:Recaptcha:SiteKey"]               = "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI",
+                    ["ClientSettings:Recaptcha:PrivateKey"]            = "test-private-key",
+                    ["ClientSettings:Recaptcha:ScoreThreshold"]        = "0.5",
+                    ["ClientSettings:Recaptcha:FailOpenOnUnavailable"] = _failOpen ? "true" : "false",
+                    ["EmailNotificationSettings:Enabled"]              = "false",
+                    ["PasswordExpiryNotificationSettings:Enabled"]     = "false",
+                    ["SiemSettings:Syslog:Enabled"]                    = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]                = "false",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"]   = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]      = "true",
+                });
+            });
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddHttpClient("recaptcha", c =>
+                {
+                    c.BaseAddress = new Uri("https://www.google.com/");
+                    c.Timeout = TimeSpan.FromSeconds(10);
+                })
+                .ConfigurePrimaryHttpMessageHandler(() => new StubRecaptchaHandler(_responder));
+            });
+        }
+    }
+
+    private static HttpResponseMessage JsonOk(string json) =>
+        new(HttpStatusCode.OK) { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") };
+
     // ─── Rate-limit coverage ──────────────────────────────────────────────────
 
     [Fact]
@@ -137,6 +263,25 @@ public class RateLimitAndRecaptchaTests
         // 6th POST exhausts the window — rate limiter emits 429 before controller executes.
         var rejected = await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+    }
+
+    /// <summary>
+    /// STAB-015 guard: the 429 emitted when the fixed window is exhausted must still
+    /// forward a <c>RateLimitExceeded</c> SIEM event. The rate-limiter OnRejected handler
+    /// uses the LEGACY <c>LogEvent</c> overload, so the recorder captures it there.
+    /// </summary>
+    [Fact]
+    public async Task RateLimit_429_EmitsRateLimitExceededEvent()
+    {
+        using var factory = new RecordingRateLimitFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        for (int i = 0; i < 5; i++)
+            await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
+        var rejected = await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+        Assert.Contains(PassReset.Web.Services.SiemEventType.RateLimitExceeded, factory.Recorder.Events);
     }
 
     [Fact]
@@ -194,6 +339,88 @@ public class RateLimitAndRecaptchaTests
         });
 
         var response = await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Recaptcha_EnabledWithEmptyToken_Rejects()
+    {
+        using var factory = new StubbedRecaptchaFactory(
+            _ => JsonOk("{\"success\":false}"), failOpen: false);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var req = MakeRequest("alice");
+        req.Recaptcha = string.Empty;
+
+        var response = await client.PostAsJsonAsync("/api/password", req);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.NotNull(result);
+        Assert.Contains(result!.Errors, e => e.ErrorCode == ApiErrorCode.InvalidCaptcha);
+    }
+
+    [Fact]
+    public async Task Recaptcha_LowScore_ReturnsInvalidCaptcha()
+    {
+        using var factory = new StubbedRecaptchaFactory(
+            _ => JsonOk("{\"success\":true,\"score\":0.3,\"action\":\"change_password\"}"),
+            failOpen: false);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var req = MakeRequest("alice");
+        req.Recaptcha = "valid-looking-token";
+
+        var response = await client.PostAsJsonAsync("/api/password", req);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.Contains(result!.Errors, e => e.ErrorCode == ApiErrorCode.InvalidCaptcha);
+    }
+
+    [Fact]
+    public async Task Recaptcha_ProviderUnreachable_FailSafeDisabled_Returns400()
+    {
+        using var factory = new StubbedRecaptchaFactory(
+            _ => throw new HttpRequestException("simulated network failure"),
+            failOpen: false);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var req = MakeRequest("alice");
+        req.Recaptcha = "any-token";
+
+        var response = await client.PostAsJsonAsync("/api/password", req);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var result = await ReadResultAsync(response);
+        Assert.Contains(result!.Errors, e => e.ErrorCode == ApiErrorCode.InvalidCaptcha);
+    }
+
+    [Fact]
+    public async Task Recaptcha_ProviderUnreachable_FailSafeEnabled_Returns200()
+    {
+        using var factory = new StubbedRecaptchaFactory(
+            _ => throw new HttpRequestException("simulated network failure"),
+            failOpen: true);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var req = MakeRequest("alice");
+        req.Recaptcha = "any-token";
+
+        var response = await client.PostAsJsonAsync("/api/password", req);
+
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 }

@@ -3,9 +3,12 @@ using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using PassReset.Common;
 using PassReset.Web.Models;
+using PassReset.Web.Services;
 
 namespace PassReset.Tests.Windows.Web.Controllers;
 
@@ -149,6 +152,81 @@ public class PasswordControllerTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var raw = await response.Content.ReadAsStringAsync();
         Assert.Contains("FieldMismatch", raw);
+    }
+
+    /// <summary>
+    /// STAB-015: the happy path must emit a structured <see cref="AuditEvent"/> carrying
+    /// <see cref="SiemEventType.PasswordChanged"/>, an outcome of "Success", and a non-empty
+    /// TraceId so SOC tooling can correlate the change across logs. The debug provider treats
+    /// unknown usernames (e.g. "alice") as a successful change.
+    /// </summary>
+    [Fact]
+    public async Task Post_Success_EmitsStructuredPasswordChangedAudit()
+    {
+        var recorder = new RecordingSiemService();
+        using var factory = new RecordingSiemFactory(recorder);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var response = await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        var changed = recorder.AuditEvents.FirstOrDefault(e => e.EventType == SiemEventType.PasswordChanged);
+        Assert.NotNull(changed);
+        Assert.Equal("Success", changed!.Outcome);
+        Assert.False(string.IsNullOrWhiteSpace(changed.TraceId));
+    }
+
+    /// <summary>
+    /// Test-double <see cref="ISiemService"/> that records every legacy event type and
+    /// structured <see cref="AuditEvent"/> so tests can assert the STAB-015 audit contract.
+    /// </summary>
+    public sealed class RecordingSiemService : ISiemService
+    {
+        public List<SiemEventType> Events { get; } = new();
+        public List<AuditEvent> AuditEvents { get; } = new();
+        public void LogEvent(SiemEventType eventType, string username, string ipAddress, string? detail = null)
+            => Events.Add(eventType);
+        public void LogEvent(AuditEvent evt) { Events.Add(evt.EventType); AuditEvents.Add(evt); }
+    }
+
+    /// <summary>
+    /// Development fixture identical to <see cref="DebugFactory"/> but with the SIEM service
+    /// swapped for a supplied <see cref="RecordingSiemService"/> so audit emissions are observable.
+    /// </summary>
+    public sealed class RecordingSiemFactory : WebApplicationFactory<Program>
+    {
+        private readonly RecordingSiemService _recorder;
+        public RecordingSiemFactory(RecordingSiemService recorder) => _recorder = recorder;
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                          = "true",
+                    ["WebSettings:EnableHttpsRedirect"]                       = "false",
+                    ["ClientSettings:MinimumDistance"]                        = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]                      = "false",
+                    ["EmailNotificationSettings:Enabled"]                     = "false",
+                    ["PasswordExpiryNotificationSettings:Enabled"]            = "false",
+                    ["SiemSettings:Syslog:Enabled"]                          = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]                      = "false",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"]          = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]             = "true",
+                });
+            });
+            builder.ConfigureTestServices(services =>
+            {
+                var existing = services.Where(d => d.ServiceType == typeof(ISiemService)).ToList();
+                foreach (var d in existing) services.Remove(d);
+                services.AddSingleton<ISiemService>(_recorder);
+            });
+        }
     }
 
     /// <summary>

@@ -475,6 +475,38 @@ public sealed class PasswordChangeProvider : IPasswordChangeProvider
         }
     }
 
+    /// <summary>
+    /// STAB-004: classifies an HRESULT raised during ChangePassword into an
+    /// <see cref="ApiErrorCode"/>. Returns <c>null</c> when the HRESULT is not one of the
+    /// known policy-violation codes (caller then preserves existing fallback behavior).
+    /// Shared by the COMException and UnauthorizedAccessException catch blocks so the
+    /// mapping is identical regardless of which exception type AccountManagement surfaces.
+    /// </summary>
+    internal static ApiErrorCode? ClassifyChangePasswordHResult(int hresult)
+    {
+        const int E_ACCESSDENIED = unchecked((int)0x80070005);
+        const int ERROR_DS_CONSTRAINT_VIOLATION = unchecked((int)0x8007202F);
+        return hresult is E_ACCESSDENIED or ERROR_DS_CONSTRAINT_VIOLATION
+            ? ApiErrorCode.PasswordTooRecentlyChanged
+            : null;
+    }
+
+    /// <summary>
+    /// STAB-004: classifies an <see cref="UnauthorizedAccessException"/> wrapping E_ACCESSDENIED.
+    /// Throws <see cref="ApiErrorException"/>(PasswordTooRecentlyChanged) for policy-violation
+    /// HResults; rethrows the original for genuine permission failures so the outer catch logs
+    /// the permission diagnostic. Static + logger-free so it is unit-testable.
+    /// </summary>
+    internal static void MapUnauthorizedAccess(UnauthorizedAccessException ex)
+    {
+        var classified = ClassifyChangePasswordHResult(ex.HResult);
+        if (classified is not null)
+            throw new ApiErrorException(
+                "Your password was changed too recently. Please wait before trying again.",
+                classified.Value);
+        throw ex;
+    }
+
     private void ChangePasswordInternal(string currentPassword, string newPassword, AuthenticablePrincipal userPrincipal)
     {
         try
@@ -483,12 +515,10 @@ public sealed class PasswordChangeProvider : IPasswordChangeProvider
         }
         catch (System.Runtime.InteropServices.COMException comEx)
         {
-            // BUG-002: classify well-known HResults BEFORE any SetPassword fallback.
+            // BUG-002 / STAB-004: classify well-known HResults BEFORE any SetPassword fallback.
             // Min-age rejection must never be routed through SetPassword (which bypasses history).
-            const int E_ACCESSDENIED = unchecked((int)0x80070005);
-            const int ERROR_DS_CONSTRAINT_VIOLATION = unchecked((int)0x8007202F);
-
-            if (comEx.HResult == E_ACCESSDENIED || comEx.HResult == ERROR_DS_CONSTRAINT_VIOLATION)
+            var classified = ClassifyChangePasswordHResult(comEx.HResult);
+            if (classified is not null)
             {
                 ExceptionChainLogger.LogExceptionChain(_logger, comEx,
                     "AD rejected ChangePassword for {User} with HRESULT=0x{Hex:X8}; message={Message}. " +
@@ -500,7 +530,7 @@ public sealed class PasswordChangeProvider : IPasswordChangeProvider
 
                 throw new ApiErrorException(
                     "Your password was changed too recently. Please wait before trying again.",
-                    ApiErrorCode.PasswordTooRecentlyChanged);
+                    classified.Value);
             }
 
             // COMException is thrown by System.DirectoryServices when the LDAP operation is
@@ -525,6 +555,19 @@ public sealed class PasswordChangeProvider : IPasswordChangeProvider
                 comEx.HResult, userPrincipal.Name);
             userPrincipal.SetPassword(newPassword);
             _logger.LogDebug("Password set via SetPassword fallback for user {User}", userPrincipal.Name);
+        }
+        catch (UnauthorizedAccessException uaEx)
+        {
+            // STAB-004: AccountManagement can surface E_ACCESSDENIED as UnauthorizedAccessException
+            // (not COMException). Map policy HResults to PasswordTooRecentlyChanged with the same
+            // diagnostic chain as the COMException path; rethrow genuine permission failures.
+            ExceptionChainLogger.LogExceptionChain(_logger, uaEx,
+                "ChangePassword raised UnauthorizedAccessException for {User} HRESULT=0x{Hex:X8}; " +
+                "treating E_ACCESSDENIED as minimum-password-age violation, otherwise a permission issue.",
+                userPrincipal.SamAccountName,
+                uaEx.HResult);
+
+            MapUnauthorizedAccess(uaEx);
         }
     }
 

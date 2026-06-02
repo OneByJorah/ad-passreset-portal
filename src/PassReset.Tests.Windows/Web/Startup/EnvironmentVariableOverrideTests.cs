@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using PassReset.Common;
 using PassReset.Web.Models;
 using Xunit;
 
@@ -95,6 +96,28 @@ public class EnvironmentVariableOverrideTests : IDisposable
         var options = factory.Services.GetRequiredService<IOptions<SmtpSettings>>();
 
         Assert.Equal("FromEnvVar", options.Value.Password);
+    }
+
+    [Fact]
+    public void EnvVar_LdapPassword_OverridesAppsettings()
+    {
+        SetEnv("PasswordChangeOptions__LdapPassword", "ldap-from-env");
+
+        using var factory = new EnvVarFactory();
+        var options = factory.Services.GetRequiredService<IOptions<PasswordChangeOptions>>();
+
+        Assert.Equal("ldap-from-env", options.Value.LdapPassword);
+    }
+
+    [Fact]
+    public void EnvVar_ServiceAccountPassword_OverridesAppsettings()
+    {
+        SetEnv("PasswordChangeOptions__ServiceAccountPassword", "svc-from-env");
+
+        using var factory = new EnvVarFactory();
+        var options = factory.Services.GetRequiredService<IOptions<PasswordChangeOptions>>();
+
+        Assert.Equal("svc-from-env", options.Value.ServiceAccountPassword);
     }
 
     [Fact]

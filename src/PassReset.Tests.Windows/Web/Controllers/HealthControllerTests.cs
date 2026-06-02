@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace PassReset.Tests.Windows.Web.Controllers;
 
@@ -25,6 +26,8 @@ public class HealthControllerTests : IDisposable
 {
     private const string SmtpPasswordSentinel = "TEST_SECRET_DO_NOT_LEAK";
     private const string RecaptchaPrivateKeySentinel = "TEST_RECAPTCHA_PRIVATE_DO_NOT_LEAK";
+    private const string LdapPasswordSentinel = "TEST_LDAP_DO_NOT_LEAK";
+    private const string ServiceAccountPasswordSentinel = "TEST_SVCACCT_DO_NOT_LEAK";
 
     private readonly DebugFactory _factory = new();
 
@@ -127,6 +130,8 @@ public class HealthControllerTests : IDisposable
 
         Assert.DoesNotContain(SmtpPasswordSentinel, body);
         Assert.DoesNotContain(RecaptchaPrivateKeySentinel, body);
+        Assert.DoesNotContain(LdapPasswordSentinel, body);
+        Assert.DoesNotContain(ServiceAccountPasswordSentinel, body);
         Assert.DoesNotContain("\"password\"", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("privateKey", body, StringComparison.OrdinalIgnoreCase);
     }
@@ -157,6 +162,102 @@ public class HealthControllerTests : IDisposable
         Assert.NotNull(dto);
         Assert.Equal("unhealthy", dto!.Status);
         Assert.Equal("unhealthy", dto.Checks!.Smtp!.Status);
+    }
+
+    // ── Test 7 ─ HealthCheckSettings registered in DI ───────────────────────────
+    [Fact]
+    public void HealthCheckSettings_IsRegisteredInDi()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var opts = scope.ServiceProvider
+            .GetService<Microsoft.Extensions.Options.IOptions<PassReset.Web.Models.HealthCheckSettings>>();
+
+        Assert.NotNull(opts);
+        Assert.NotNull(opts!.Value);
+    }
+
+    // ── Test 8 ─ SMTP probe disabled via config => skipped, aggregate healthy ----
+    [Fact]
+    public async Task Get_SmtpProbeDisabled_SkipsSmtpAndStaysHealthy()
+    {
+        using var factory = new SmtpProbeDisabledFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var response = await client.GetAsync("/api/health");
+        var dto = await response.Content.ReadFromJsonAsync<HealthResponseDto>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(dto);
+        Assert.Equal("skipped", dto!.Checks!.Smtp!.Status);
+        Assert.True(dto.Checks.Smtp.Skipped);
+        Assert.Equal("healthy", dto.Status);
+    }
+
+    // ── Test 9 ─ Fresh deploy: expiry enabled, not yet run => healthy/200 --------
+    [Fact]
+    public async Task Get_ExpiryService_EnabledButNotYetRun_ReturnsHealthy()
+    {
+        using var factory = new ExpiryEnabledFreshFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var response = await client.GetAsync("/api/health");
+        var dto = await response.Content.ReadFromJsonAsync<HealthResponseDto>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(dto);
+        Assert.Equal("healthy", dto!.Checks!.ExpiryService!.Status);
+        Assert.Equal("healthy", dto.Status);
+    }
+
+    // ── Test 10 ─ Expiry check disabled via config => skipped --------------------
+    [Fact]
+    public async Task Get_ExpiryCheckDisabled_SkipsExpiryService()
+    {
+        using var factory = new ExpiryCheckDisabledFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var response = await client.GetAsync("/api/health");
+        var dto = await response.Content.ReadFromJsonAsync<HealthResponseDto>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(dto);
+        Assert.Equal("skipped", dto!.Checks!.ExpiryService!.Status);
+        Assert.Equal("healthy", dto.Status);
+    }
+
+    // ── Test 11 ─ Grace exceeded (grace=0) + not-yet-run => degraded/503 ---------
+    //  Regression guard: a genuinely stuck expiry service is still surfaced.
+    [Fact]
+    public async Task Get_ExpiryService_NotYetRun_GraceZero_ReportsDegraded()
+    {
+        using var factory = new ExpiryStuckFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var response = await client.GetAsync("/api/health");
+        var dto = await response.Content.ReadFromJsonAsync<HealthResponseDto>();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.NotNull(dto);
+        Assert.Equal("degraded", dto!.Checks!.ExpiryService!.Status);
+        Assert.Equal("degraded", dto.Status);
+    }
+
+    // ── Test 12 ─ All probes disabled => 200 even with all deps unreachable ------
+    [Fact]
+    public async Task Get_AllProbesDisabled_Returns200_EvenWhenDepsUnreachable()
+    {
+        using var factory = new AllProbesDisabledFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var response = await client.GetAsync("/api/health");
+        var dto = await response.Content.ReadFromJsonAsync<HealthResponseDto>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(dto);
+        Assert.Equal("healthy", dto!.Status);
+        Assert.Equal("skipped", dto.Checks!.Ad!.Status);
+        Assert.Equal("skipped", dto.Checks.Smtp!.Status);
+        Assert.Equal("skipped", dto.Checks.ExpiryService!.Status);
     }
 
     // ── Factories ──────────────────────────────────────────────────────────────
@@ -242,6 +343,8 @@ public class HealthControllerTests : IDisposable
                     ["PasswordChangeOptions:UseAutomaticContext"]             = "false",
                     ["PasswordChangeOptions:LdapHostnames:0"]                 = "127.0.0.1",
                     ["PasswordChangeOptions:LdapPort"]                        = adPort,
+                    ["PasswordChangeOptions:LdapPassword"]                    = LdapPasswordSentinel,
+                    ["PasswordChangeOptions:ServiceAccountPassword"]          = ServiceAccountPasswordSentinel,
                 });
             });
         }
@@ -280,6 +383,209 @@ public class HealthControllerTests : IDisposable
                     ["PasswordChangeOptions:UseAutomaticContext"]             = "false",
                     ["PasswordChangeOptions:LdapHostnames:0"]                 = "127.0.0.1",
                     ["PasswordChangeOptions:LdapPort"]                        = adPort,
+                });
+            });
+        }
+    }
+
+    /// <summary>
+    /// Email enabled AND SMTP pointed at an unreachable blackhole, BUT the SMTP probe
+    /// is disabled via HealthCheckSettings — so the endpoint must stay healthy/200.
+    /// </summary>
+    public sealed class SmtpProbeDisabledFactory : FakeAdFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            var adPort = FakeAdPort.ToString(CultureInfo.InvariantCulture);
+            builder.UseEnvironment("Development");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                  = "true",
+                    ["WebSettings:EnableHttpsRedirect"]               = "false",
+                    ["ClientSettings:MinimumDistance"]                = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]              = "false",
+                    ["EmailNotificationSettings:Enabled"]             = "true",
+                    ["PasswordExpiryNotificationSettings:Enabled"]    = "false",
+                    ["SiemSettings:Syslog:Enabled"]                   = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]               = "false",
+                    ["SmtpSettings:Host"]                             = "192.0.2.1",
+                    ["SmtpSettings:Port"]                             = "1",
+                    ["SmtpSettings:FromAddress"]                      = "passreset@test.invalid",
+                    ["HealthCheckSettings:DisableSmtpConnectivityProbe"] = "true",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"]  = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]     = "false",
+                    ["PasswordChangeOptions:LdapHostnames:0"]         = "127.0.0.1",
+                    ["PasswordChangeOptions:LdapPort"]                = adPort,
+                });
+            });
+        }
+    }
+
+    /// <summary>
+    /// Expiry notification enabled with a real background service that has not yet
+    /// ticked (LastTickUtc=null). With the default grace period this must report
+    /// "healthy" so a fresh deploy returns 200 — the #34 installer contract.
+    /// </summary>
+    public sealed class ExpiryEnabledFreshFactory : FakeAdFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            var adPort = FakeAdPort.ToString(CultureInfo.InvariantCulture);
+            builder.UseEnvironment("Development");
+            // Program.cs decides expiry-service wiring via an EAGER builder.Configuration
+            // read at startup (before ConfigureAppConfiguration sources are layered in by
+            // WebApplicationFactory at Build()). UseSetting writes host configuration that
+            // CreateBuilder consumes BEFORE that eager read, so the real expiry service is
+            // registered. The ConfigureAppConfiguration block below still covers the
+            // deferred IOptions reads (AD/SMTP probes at request time).
+            builder.UseSetting("PasswordExpiryNotificationSettings:Enabled", "true");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                  = "true",
+                    ["WebSettings:EnableHttpsRedirect"]               = "false",
+                    ["ClientSettings:MinimumDistance"]                = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]              = "false",
+                    ["EmailNotificationSettings:Enabled"]             = "false",
+                    // Enable the expiry service so the diagnostics report IsEnabled=true.
+                    ["PasswordExpiryNotificationSettings:Enabled"]    = "true",
+                    ["PasswordExpiryNotificationSettings:NotificationTimeUtc"] = "08:00",
+                    ["PasswordExpiryNotificationSettings:PassResetUrl"]        = "https://passreset.test.invalid",
+                    ["PasswordExpiryNotificationSettings:DaysBeforeExpiry"]    = "14",
+                    ["SiemSettings:Syslog:Enabled"]                   = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]               = "false",
+                    // SMTP probe disabled so the (now-enabled) email path can't make the
+                    // test flaky — this test isolates the expiry-service behavior.
+                    ["HealthCheckSettings:DisableSmtpConnectivityProbe"] = "true",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"]  = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]     = "false",
+                    ["PasswordChangeOptions:LdapHostnames:0"]         = "127.0.0.1",
+                    ["PasswordChangeOptions:LdapPort"]                = adPort,
+                });
+            });
+        }
+    }
+
+    /// <summary>
+    /// Expiry enabled and not-yet-run, but the expiry CHECK is disabled via
+    /// HealthCheckSettings — must report "skipped".
+    /// </summary>
+    public sealed class ExpiryCheckDisabledFactory : FakeAdFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            var adPort = FakeAdPort.ToString(CultureInfo.InvariantCulture);
+            builder.UseEnvironment("Development");
+            // Eager-read visibility for the expiry-service wiring decision — see
+            // ExpiryEnabledFreshFactory for the full rationale.
+            builder.UseSetting("PasswordExpiryNotificationSettings:Enabled", "true");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                  = "true",
+                    ["WebSettings:EnableHttpsRedirect"]               = "false",
+                    ["ClientSettings:MinimumDistance"]                = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]              = "false",
+                    ["EmailNotificationSettings:Enabled"]             = "false",
+                    ["PasswordExpiryNotificationSettings:Enabled"]    = "true",
+                    ["PasswordExpiryNotificationSettings:NotificationTimeUtc"] = "08:00",
+                    ["PasswordExpiryNotificationSettings:PassResetUrl"]        = "https://passreset.test.invalid",
+                    ["PasswordExpiryNotificationSettings:DaysBeforeExpiry"]    = "14",
+                    ["SiemSettings:Syslog:Enabled"]                   = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]               = "false",
+                    ["HealthCheckSettings:DisableSmtpConnectivityProbe"] = "true",
+                    ["HealthCheckSettings:DisableExpiryServiceCheck"]    = "true",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"]  = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]     = "false",
+                    ["PasswordChangeOptions:LdapHostnames:0"]         = "127.0.0.1",
+                    ["PasswordChangeOptions:LdapPort"]                = adPort,
+                });
+            });
+        }
+    }
+
+    /// <summary>
+    /// Expiry enabled, not-yet-run, grace period = 0 → must report "degraded" (stuck).
+    /// Regression guard that Task 1.5 did not erase the stuck-service signal. AD stays
+    /// healthy (loopback listener) so the only non-healthy check is the expiry service.
+    /// </summary>
+    public sealed class ExpiryStuckFactory : FakeAdFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            var adPort = FakeAdPort.ToString(CultureInfo.InvariantCulture);
+            builder.UseEnvironment("Development");
+            // Eager-read visibility for the expiry-service wiring decision — see
+            // ExpiryEnabledFreshFactory for the full rationale.
+            builder.UseSetting("PasswordExpiryNotificationSettings:Enabled", "true");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                  = "true",
+                    ["WebSettings:EnableHttpsRedirect"]               = "false",
+                    ["ClientSettings:MinimumDistance"]                = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]              = "false",
+                    ["EmailNotificationSettings:Enabled"]             = "false",
+                    ["PasswordExpiryNotificationSettings:Enabled"]    = "true",
+                    ["PasswordExpiryNotificationSettings:NotificationTimeUtc"] = "08:00",
+                    ["PasswordExpiryNotificationSettings:PassResetUrl"]        = "https://passreset.test.invalid",
+                    ["PasswordExpiryNotificationSettings:DaysBeforeExpiry"]    = "14",
+                    ["SiemSettings:Syslog:Enabled"]                   = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]               = "false",
+                    ["HealthCheckSettings:DisableSmtpConnectivityProbe"]   = "true",
+                    ["HealthCheckSettings:ExpiryServiceGracePeriodSeconds"] = "0",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"]  = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]     = "false",
+                    ["PasswordChangeOptions:LdapHostnames:0"]         = "127.0.0.1",
+                    ["PasswordChangeOptions:LdapPort"]                = adPort,
+                });
+            });
+        }
+    }
+
+    /// <summary>
+    /// Every probe disabled via HealthCheckSettings while every dependency is unreachable
+    /// (blackhole SMTP, no AD listener bound, expiry stuck). Endpoint must still be 200/healthy.
+    /// </summary>
+    public sealed class AllProbesDisabledFactory : FakeAdFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Development");
+            // Eager-read visibility for the expiry-service wiring decision — see
+            // ExpiryEnabledFreshFactory for the full rationale.
+            builder.UseSetting("PasswordExpiryNotificationSettings:Enabled", "true");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WebSettings:UseDebugProvider"]                  = "true",
+                    ["WebSettings:EnableHttpsRedirect"]               = "false",
+                    ["ClientSettings:MinimumDistance"]                = "0",
+                    ["ClientSettings:Recaptcha:Enabled"]              = "false",
+                    ["EmailNotificationSettings:Enabled"]             = "true",
+                    ["PasswordExpiryNotificationSettings:Enabled"]    = "true",
+                    ["PasswordExpiryNotificationSettings:NotificationTimeUtc"] = "08:00",
+                    ["PasswordExpiryNotificationSettings:PassResetUrl"]        = "https://passreset.test.invalid",
+                    ["PasswordExpiryNotificationSettings:DaysBeforeExpiry"]    = "14",
+                    ["SiemSettings:Syslog:Enabled"]                   = "false",
+                    ["SiemSettings:AlertEmail:Enabled"]               = "false",
+                    ["SmtpSettings:Host"]                             = "192.0.2.1",
+                    ["SmtpSettings:Port"]                             = "1",
+                    ["SmtpSettings:FromAddress"]                      = "passreset@test.invalid",
+                    ["HealthCheckSettings:DisableSmtpConnectivityProbe"]    = "true",
+                    ["HealthCheckSettings:DisableExpiryServiceCheck"]       = "true",
+                    ["HealthCheckSettings:DisableAdConnectivityProbe"]      = "true",
+                    ["PasswordChangeOptions:PortalLockoutThreshold"]  = "0",
+                    ["PasswordChangeOptions:UseAutomaticContext"]     = "false",
+                    // Point AD at an unreachable host to prove the disabled probe never runs.
+                    ["PasswordChangeOptions:LdapHostnames:0"]         = "192.0.2.1",
+                    ["PasswordChangeOptions:LdapPort"]                = "1",
                 });
             });
         }

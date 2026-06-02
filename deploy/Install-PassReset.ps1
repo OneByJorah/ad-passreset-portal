@@ -1,4 +1,3 @@
-﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     Installs PassReset on IIS (Windows Server 2019 / 2022 / 2025, IIS 10).
@@ -11,6 +10,10 @@
       4. Sets NTFS permissions for the app pool identity.
       5. Writes a starter appsettings.Production.json with placeholders.
       6. Optionally binds an existing HTTPS certificate.
+      7. On upgrade: syncs appsettings.Production.json against the bundled schema —
+         adds missing keys from defaults, reports/removes obsolete keys, backs up
+         the file first, and writes a durable sync log. Runs on IIS, Service, and
+         Console hosting modes. See -ConfigSync.
 
 .PARAMETER SiteName
     Name of the IIS site to create or update. Default: PassReset
@@ -69,6 +72,39 @@
     Skip the interactive upgrade confirmation prompt when an existing installation is detected.
     Use this for unattended / CI deployments.
 
+.PARAMETER Reconfigure
+    Force reconfigure mode: re-run app-pool / binding / config logic without mirroring
+    files, even when the incoming version differs. Same-version re-runs auto-detect
+    reconfigure; this switch makes it explicit (e.g. to re-apply config after editing).
+
+.PARAMETER InstallDependencies
+    Controls prerequisite auto-install: 'prompt' (default, interactive Y/N),
+    'yes' (auto-install missing IIS features and .NET Hosting Bundle), or 'no'
+    (abort cleanly when a prerequisite is missing). -Force implies 'yes'.
+
+.PARAMETER SkipDependencyCheck
+    Skip all prerequisite detection (IIS features + .NET Hosting Bundle). Use only
+    on hosts you have already validated. The installer proceeds straight to site setup.
+
+.PARAMETER ConfigSync
+    Controls how appsettings.Production.json is reconciled with the schema on upgrade.
+    Modes:
+      Merge  - Add missing keys from schema defaults; report obsolete keys (never removed).
+               Existing values are NEVER modified.
+      Review - Interactively prompt to add each missing key and to remove each obsolete key.
+      Diff   - Dry-run: print every key that WOULD be added and which obsolete keys are
+               present, then exit WITHOUT writing the file or creating a backup.
+      None   - Skip sync entirely.
+
+    Default (when omitted): resolved at runtime —
+      * Fresh install  -> None (template copied verbatim).
+      * Upgrade + -Force or non-interactive (Service/Console/CI) -> Merge (safe, additive).
+      * Interactive upgrade -> prompts the operator to choose Merge/Review/Diff/Skip.
+
+    Merge is safe: it only adds keys and never changes existing values. Before any write,
+    a timestamped backup (<config>_<yyyyMMdd-HHmmss>.bak) and a sync log
+    (<config>_sync-<timestamp>.log) are created next to appsettings.Production.json.
+
 .EXAMPLE
     # Minimal — uses built-in app pool identity, no HTTPS binding wired yet:
     .\Install-PassReset.ps1
@@ -81,7 +117,16 @@
         -CertThumbprint  "A1B2C3D4E5F6..." `
         -LdapPassword    (Read-Host 'LDAP password' -AsSecureString) `
         -SmtpPassword    (Read-Host 'SMTP password' -AsSecureString)
+
+.EXAMPLE
+    # Preview config changes on upgrade without writing anything:
+    .\Install-PassReset.ps1 -ConfigSync Diff -Force
+
+.EXAMPLE
+    # Unattended upgrade that adds any new keys from schema defaults:
+    .\Install-PassReset.ps1 -Force -ConfigSync Merge
 #>
+#Requires -Version 7.0
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string] $SiteName        = 'PassReset',
@@ -99,14 +144,22 @@ param(
     [SecureString] $SmtpPassword        = $null,
     [SecureString] $RecaptchaPrivateKey  = $null,
 
-    [ValidateSet('Merge','Review','None')]
+    [ValidateSet('Merge','Review','None','Diff')]
     [string] $ConfigSync = '',   # empty -> resolved post-upgrade-detection: prompt if interactive, 'Merge' if -Force, 'None' if fresh install
 
     [switch] $Force,
 
+    # STAB-002: explicit reconfigure trigger (same-version re-runs auto-detect this).
+    [switch] $Reconfigure,
+
     # STAB-019: bypass post-deploy /api/health + /api/password verification (air-gapped hosts only).
     # Default $false — verification runs by default, including under -Force (D-06/D-07).
     [switch] $SkipHealthCheck = $false,
+
+    [ValidateSet('prompt','yes','no')]
+    [string] $InstallDependencies = 'prompt',
+
+    [switch] $SkipDependencyCheck,
 
     [ValidateSet('IIS','Service','Console')]
     [string] $HostingMode,
@@ -151,6 +204,127 @@ function Restore-StoppedForeignSites {
 
 function Abort       { param([string]$Msg) Restore-StoppedForeignSites; Write-Host "`n[ERR] $Msg`n" -ForegroundColor Red; exit 1 }
 
+function Resolve-DependencyAction {
+    <#
+        STAB-006: decide how to handle a missing prerequisite without prompting in
+        non-interactive contexts. -Force implies auto-install (safe CI behavior).
+    #>
+    param(
+        [ValidateSet('prompt','yes','no')]
+        [string] $InstallDependencies = 'prompt',
+        [bool]   $Force
+    )
+    if ($Force)                          { return 'install' }
+    switch ($InstallDependencies) {
+        'yes'    { return 'install' }
+        'no'     { return 'abort' }
+        default  { return 'prompt' }
+    }
+}
+
+function Test-DismRebootPending {
+    <# STAB-006: DISM exit 3010 = success but a reboot is required to complete. #>
+    param([int[]] $ExitCodes)
+    return [bool]($ExitCodes | Where-Object { $_ -eq 3010 })
+}
+
+function Get-HostingBundleDiagnostic {
+    <# STAB-006: structured "what is missing" message for the .NET Hosting Bundle. #>
+    param([string] $InstalledVersion)
+    if (-not $InstalledVersion) {
+        return 'Missing: ASP.NET Core 10.0 Hosting Bundle (not detected in HKLM registry: SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedhost).'
+    }
+    if ($InstalledVersion -notmatch '^10\.') {
+        return "Found incompatible .NET Hosting Bundle: $InstalledVersion - required: 10.0.0 or later."
+    }
+    return $null
+}
+
+function Get-DoneBannerMessage {
+    <#
+        STAB-002: choose the Done-banner verb. A backup is created for ANY existing
+        install, so $BackupPath alone cannot distinguish upgrade from reconfigure.
+        Reconfigure (same incoming version) only counts when an existing install
+        was present (i.e. a backup exists).
+    #>
+    param(
+        [string]  $BackupPath,
+        [bool]    $IsReconfigure
+    )
+    if (-not $BackupPath)  { return 'PassReset installed successfully.' }
+    if ($IsReconfigure)    { return 'PassReset reconfigured successfully.' }
+    return 'PassReset upgraded successfully.'
+}
+
+function Resolve-HealthHostHeader {
+    <#
+        STAB-019: derive the host the post-deploy health check should target from an
+        IIS binding's BindingInformation ("*:port:hostname"). A wildcard/empty host
+        means "all hostnames" - fall back to the machine name so the loopback request
+        actually resolves.
+    #>
+    param(
+        [string] $BindingInformation,
+        [string] $Fallback
+    )
+    if ([string]::IsNullOrWhiteSpace($BindingInformation)) { return $Fallback }
+    $parts = $BindingInformation -split ':'
+    $hostName = if ($parts.Count -ge 3) { $parts[2] } else { '' }
+    if ([string]::IsNullOrWhiteSpace($hostName)) { return $Fallback }
+    return $hostName
+}
+
+function Test-HealthResponseHealthy {
+    <#
+        STAB-019: a 200 is necessary but not sufficient - the /api/health aggregate
+        'status' must be 'healthy'. Unparseable bodies fail closed.
+    #>
+    param([string] $HealthJson)
+    try {
+        $obj = $HealthJson | ConvertFrom-Json -ErrorAction Stop
+        return ($obj.status -eq 'healthy')
+    } catch {
+        return $false
+    }
+}
+
+function Get-HealthFailureDiagnostics {
+    <# STAB-019: actionable multi-line pointer block printed on health-check failure. #>
+    param(
+        [string] $BaseUrl,
+        [string] $LogsPath
+    )
+    return @"
+Post-deploy health check failed for $BaseUrl.
+
+Troubleshooting:
+  1. Logs: inspect $LogsPath for ASP.NET Core startup and request errors.
+  2. Event Viewer -> Windows Logs -> Application, Source 'PassReset' (ID 1001) for config/startup failures.
+  3. App pool: open IIS Manager and confirm the PassReset app pool is Started (not stopped on a crash).
+  4. Binding: confirm the site's host header and port match $BaseUrl (mismatch -> connection refused / 404).
+  5. Common causes: wrong app-pool identity, occupied port, HTTPS cert not bound, appsettings.Production.json schema errors.
+"@
+}
+
+# STAB-016: validate that an HTTPS binding exists on the configured port. Pure function
+# (takes a binding collection) so Pester can exercise it without a live IIS site. Returns
+# a small object the caller uses to Write-Ok / Write-Warn (warn-not-block per D-13).
+function Test-HttpsBinding {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] $Bindings,
+        [Parameter(Mandatory)] [int] $HttpsPort
+    )
+    $hasHttps = $false
+    foreach ($b in $Bindings) {
+        if ($b.protocol -eq 'https' -and $b.bindingInformation -match ":${HttpsPort}:") {
+            $hasHttps = $true
+            break
+        }
+    }
+    return [pscustomobject]@{ HasHttps = $hasHttps; HttpsPort = $HttpsPort }
+}
+
 # ─── Config Sync Helpers (plan 08-05 / STAB-010) ──────────────────────────────
 # Schema-driven additive merge: walks appsettings.schema.json (NOT the template),
 # enumerates every leaf key + default, and adds anything missing from the operator's
@@ -166,12 +340,20 @@ function Get-SchemaKeyManifest {
         [string] $Prefix = ''
     )
     $entries = @()
-    if ($null -eq $Schema -or $null -eq $Schema.properties) { return $entries }
+    if ($null -eq $Schema) { return $entries }
+    # Membership-guard the .properties access so Set-StrictMode -Version Latest does not throw
+    # on object nodes that declare no 'properties' (e.g. { "type":"object", "additionalProperties":true }).
+    if ($Schema.PSObject.Properties.Name -notcontains 'properties' -or $null -eq $Schema.properties) { return $entries }
     foreach ($prop in $Schema.properties.PSObject.Properties) {
         $name = $prop.Name
         $node = $prop.Value
         $path = if ($Prefix) { "${Prefix}:${name}" } else { $name }
-        $isObj = ($node.type -eq 'object') -or ($null -ne $node.properties)
+        $hasProperties = $node.PSObject.Properties.Name -contains 'properties'
+        # Membership-guard the .type access so Set-StrictMode -Version Latest does not throw on
+        # nodes that omit 'type' (valid JSON Schema: $ref/allOf/oneOf/enum-only/const). A missing
+        # type resolves to $null (-> not an object -> treated as a leaf, the safe default).
+        $nodeType = if ($node.PSObject.Properties.Name -contains 'type') { $node.type } else { $null }
+        $isObj = ($nodeType -eq 'object') -or $hasProperties
         if ($isObj) {
             # Recurse into nested object (don't emit a leaf for the object itself)
             $entries += Get-SchemaKeyManifest -Schema $node -Prefix $path
@@ -199,7 +381,7 @@ function Get-SchemaKeyManifest {
                 HasDefault     = $hasDefault
                 IsObsolete     = $isObsolete
                 ObsoleteSince  = $obsoleteSince
-                Type           = $node.type
+                Type           = $nodeType
             }
         }
     }
@@ -250,8 +432,10 @@ function Set-LiveValueAtPath {
         $node = $prop.Value
     }
     $leaf = $segments[-1]
-    if ($node.PSObject.Properties.Name -contains $leaf) {
-        # Per D-09/D-13: never modify existing values
+    if ($null -ne $node.PSObject.Properties[$leaf]) {
+        # Per D-09/D-13: never modify existing values.
+        # Indexer form is StrictMode-safe on a freshly-created empty parent
+        # object, where '.PSObject.Properties.Name' would throw.
         return $false
     }
     $node | Add-Member -NotePropertyName $leaf -NotePropertyValue $Value
@@ -273,7 +457,7 @@ function Remove-LiveValueAtPath {
         $node = $prop.Value
     }
     $leaf = $segments[-1]
-    if ($node.PSObject.Properties.Name -notcontains $leaf) { return $false }
+    if ($null -eq $node.PSObject.Properties[$leaf]) { return $false }
     $node.PSObject.Properties.Remove($leaf)
     return $true
 }
@@ -283,7 +467,8 @@ function Sync-AppSettingsAgainstSchema {
     param(
         [Parameter(Mandatory)] [string] $SchemaPath,
         [Parameter(Mandatory)] [string] $ConfigPath,
-        [Parameter(Mandatory)] [ValidateSet('Merge','Review','None')] [string] $Mode
+        [Parameter(Mandatory)] [ValidateSet('Merge','Review','None','Diff')] [string] $Mode,
+        [string] $LogPath = ''
     )
     if ($Mode -eq 'None') {
         Write-Ok 'Config sync skipped (-ConfigSync None)'
@@ -305,6 +490,17 @@ function Sync-AppSettingsAgainstSchema {
     $additions = @()
     $obsoleteFound = @()
     $modified = $false
+    $removedCount = 0
+    $isDryRun     = ($Mode -eq 'Diff')
+
+    if (-not $LogPath) {
+        $stamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $base    = [IO.Path]::Combine([IO.Path]::GetDirectoryName($ConfigPath),
+                       [IO.Path]::GetFileNameWithoutExtension($ConfigPath))
+        $LogPath = "${base}_sync-${stamp}.log"
+    }
+    function script:Add-SyncLog { param([string]$Line) Add-Content -Path $LogPath -Value "$(Get-Date -Format o)  $Line" -Encoding UTF8 }
+    Add-SyncLog "Config sync started: mode=$Mode, config=$ConfigPath"
 
     foreach ($entry in $manifest) {
         $look = Get-LiveValueAtPath -Config $live -Path $entry.Path
@@ -316,7 +512,9 @@ function Sync-AppSettingsAgainstSchema {
                     if ($reply -match '^[Yy]') {
                         if (Remove-LiveValueAtPath -Config $live -Path $entry.Path) {
                             $modified = $true
+                            $removedCount++
                             Write-Ok "  - Removed obsolete: $($entry.Path)"
+                            Add-SyncLog "REMOVE  $($entry.Path)"
                         }
                     }
                 } else {
@@ -332,6 +530,13 @@ function Sync-AppSettingsAgainstSchema {
                 Write-Warn "Missing key '$($entry.Path)' has no default in schema; not added (operator must set manually)."
                 continue
             }
+            if ($isDryRun) {
+                # Diff (dry-run): record what WOULD be added; never prompt, never mutate.
+                $additions += $entry
+                Write-Ok "  would add $($entry.Path) = $($entry.Default)"
+                Add-SyncLog "WOULD-ADD  $($entry.Path) = $($entry.Default)"
+                continue
+            }
             if ($Mode -eq 'Review') {
                 $defaultDisplay = if ($entry.Default -is [array]) { '[' + (($entry.Default | ForEach-Object { "`"$_`"" }) -join ',') + ']' } else { "$($entry.Default)" }
                 $reply = Read-Host "  Add '$($entry.Path)' with default = $defaultDisplay? [Y/N] [Y]"
@@ -342,6 +547,7 @@ function Sync-AppSettingsAgainstSchema {
                     $modified = $true
                     $additions += $entry
                     Write-Ok "  + $($entry.Path) = $($entry.Default)"
+                    Add-SyncLog "ADD  $($entry.Path) = $($entry.Default)"
                 }
             } catch {
                 Write-Warn "Could not add '$($entry.Path)': $($_.Exception.Message)"
@@ -349,15 +555,55 @@ function Sync-AppSettingsAgainstSchema {
         }
     }
 
+    if ($isDryRun) {
+        Write-Ok "Dry-run (-ConfigSync Diff): $($additions.Count) key(s) would be added, $($obsoleteFound.Count) obsolete key(s) present. No file written."
+        Write-Ok "Sync log: $LogPath"
+        return
+    }
+
     if ($modified) {
+        $backupPath = "${ConfigPath}_$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+        Copy-Item -Path $ConfigPath -Destination $backupPath -Force
+        Write-Ok "Backup before sync: $backupPath"
+        Add-SyncLog "BACKUP  $backupPath"
         $live | ConvertTo-Json -Depth 32 | Set-Content -Path $ConfigPath -Encoding UTF8 -NoNewline
-        Write-Ok "Wrote $($additions.Count) addition(s) to $ConfigPath"
+        Write-Ok "Sync summary: $($additions.Count) added, $removedCount removed. Wrote $ConfigPath"
+        Write-Ok "Sync log: $LogPath"
+        Add-SyncLog "Sync summary: $($additions.Count) added, $removedCount removed."
     } else {
         Write-Ok 'Config is in sync with schema; no changes written.'
+        Add-SyncLog 'No changes.'
     }
 
     if ($obsoleteFound.Count -gt 0 -and $Mode -eq 'Merge') {
         Write-Warn "$($obsoleteFound.Count) obsolete key(s) reported above. Re-run with -ConfigSync Review to remove interactively."
+    }
+}
+
+# ─── Config sync mode resolution (STAB-010 / #24) ─────────────────────────────
+# Resolves the effective config-sync mode for ALL hosting modes (IIS, Service,
+# Console). Extracted from the inline $siteExists-keyed block so Service/Console
+# upgrades resolve correctly instead of always skipping the sync. Pure function:
+# no side effects beyond the interactive prompt, so it is unit-testable.
+
+function Resolve-ConfigSyncMode {
+    [CmdletBinding()]
+    param(
+        [string] $Requested,
+        [bool]   $Force,
+        [bool]   $IsUpgrade,
+        [bool]   $Interactive
+    )
+    if ($Requested) { return $Requested }
+    if ($Force)     { return 'Merge' }
+    if (-not $IsUpgrade) { return 'None' }          # fresh install: template copied verbatim
+    if (-not $Interactive) { return 'Merge' }       # unattended upgrade (Service/Console/CI): safe additive
+    $reply = Read-Host '  Config sync: [M]erge additions / [R]eview each / [D]ry-run diff / [S]kip? [M]'
+    switch -Regex ($reply) {
+        '^[Rr]' { 'Review' }
+        '^[Dd]' { 'Diff' }
+        '^[Ss]' { 'None' }
+        default { 'Merge' }
     }
 }
 
@@ -808,7 +1054,7 @@ Write-Step 'Checking prerequisites'
 # IIS prerequisites only apply when hosting under IIS. Service/Console modes
 # run standalone and must not hard-fail (or invoke Get-WindowsFeature, which
 # throws on workstation-class hosts without the Server-Manager RSAT).
-if ($HostingMode -eq 'IIS') {
+if ($HostingMode -eq 'IIS' -and -not $SkipDependencyCheck) {
     # IIS
     if (-not (Get-Service -Name W3SVC -ErrorAction SilentlyContinue)) {
         Abort 'IIS (W3SVC) is not installed. Install the Web Server (IIS) role first.'
@@ -837,32 +1083,55 @@ if ($HostingMode -eq 'IIS') {
     if ($missing) {
         Write-Warn 'Missing IIS features detected:'
         $missing | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
-        if (-not $Force) {
+
+        $action = Resolve-DependencyAction -InstallDependencies $InstallDependencies -Force $Force.IsPresent
+        if ($action -eq 'prompt') {
             $consent = Read-Host '  Install missing IIS features now via DISM? [Y/N]'
-            if ($consent -notmatch '^[Yy]') {
-                Write-Host ''
-                Write-Host '  To install manually, run as Administrator:' -ForegroundColor Yellow
-                foreach ($f in $missing) {
-                    Write-Host "    dism /online /enable-feature /featurename:$f /all /norestart" -ForegroundColor Yellow
-                }
-                Write-Host ''
-                exit 0
-            }
-        } else {
-            Write-Ok '-Force specified - installing missing IIS features via DISM'
+            $action  = if ($consent -match '^[Yy]') { 'install' } else { 'abort' }
         }
+        if ($action -eq 'abort') {
+            Write-Host ''
+            Write-Host '  Missing IIS roles/features (not installed):' -ForegroundColor Yellow
+            Write-Host '  To install manually, run as Administrator:' -ForegroundColor Yellow
+            foreach ($f in $missing) {
+                Write-Host "    dism /online /enable-feature /featurename:$f /all /norestart" -ForegroundColor Yellow
+            }
+            Write-Host ''
+            exit 0
+        }
+        Write-Ok 'Installing missing IIS features via DISM'
+
+        $dismExits = @()
         foreach ($f in $missing) {
             if ($PSCmdlet.ShouldProcess("IIS feature $f", 'Enable via DISM')) {
-                $dismExit = (Start-Process -FilePath dism.exe `
+                $code = (Start-Process -FilePath dism.exe `
                     -ArgumentList @('/online','/enable-feature',"/featurename:$f",'/all','/norestart','/quiet') `
                     -Wait -PassThru -NoNewWindow).ExitCode
+                $dismExits += $code
                 # 3010 = success, reboot pending (Microsoft DISM convention)
-                if ($dismExit -ne 0 -and $dismExit -ne 3010) {
-                    Abort "DISM failed enabling $f (exit $dismExit). Run: dism /online /get-featureinfo /featurename:$f"
+                if ($code -ne 0 -and $code -ne 3010) {
+                    Abort "DISM failed enabling $f (exit $code). Run: dism /online /get-featureinfo /featurename:$f"
                 }
             }
         }
         Write-Ok 'IIS features enabled via DISM'
+
+        # STAB-006: a reboot is required to complete feature install - do NOT proceed
+        # to site/pool creation; the worker process would start without the roles present.
+        if (Test-DismRebootPending -ExitCodes $dismExits) {
+            Abort 'IIS feature installation requires a system reboot (DISM exit 3010). Reboot and re-run the installer.'
+        }
+
+        # STAB-006: re-validate after install; abort with an explicit list if anything is still missing.
+        $stillMissing = $requiredFeatures | Where-Object {
+            (Get-WindowsFeature -Name $_).InstallState -ne 'Installed'
+        }
+        if ($stillMissing) {
+            Write-Warn 'These IIS features are still not installed after DISM:'
+            $stillMissing | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+            Abort 'Prerequisite IIS features could not be installed. Resolve manually and re-run.'
+        }
+        Write-Ok 'All required IIS features present (re-validated post-install)'
     } else {
         Write-Ok 'All required IIS features present'
     }
@@ -873,25 +1142,42 @@ $hostingBundle = Get-ItemProperty `
     -Path 'HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedhost' `
     -ErrorAction SilentlyContinue
 
-if (-not $hostingBundle) {
-    Write-Warn '.NET 10 Hosting Bundle is not installed.'
+# Set-StrictMode -Version Latest is active (top of script): guard the .Version access so a
+# $null $hostingBundle (registry key absent) does not throw on property dereference.
+$bundleVer  = if ($hostingBundle) { $hostingBundle.Version } else { $null }
+$bundleDiag = Get-HostingBundleDiagnostic -InstalledVersion $bundleVer
+if (-not $SkipDependencyCheck -and $bundleDiag) {
+    Write-Warn $bundleDiag
     Write-Host '  Required: ASP.NET Core 10.0 Runtime (Hosting Bundle)' -ForegroundColor Yellow
     Write-Host '  Download: https://dotnet.microsoft.com/download/dotnet/10.0' -ForegroundColor Yellow
-    Write-Host '  Choose "ASP.NET Core Runtime - Hosting Bundle" for Windows.' -ForegroundColor Yellow
-    Write-Host ''
-    Write-Host '  Re-run this installer after the Hosting Bundle is installed.' -ForegroundColor Yellow
-    Write-Host ''
-    exit 0
-}
 
-$installedRuntime = $hostingBundle.Version
-if (-not ($installedRuntime -match '^10\.')) {
-    Write-Warn ".NET 10 Hosting Bundle is required but found version $installedRuntime."
-    Write-Host '  Required: ASP.NET Core 10.0 Runtime (Hosting Bundle)' -ForegroundColor Yellow
-    Write-Host '  Download: https://dotnet.microsoft.com/download/dotnet/10.0' -ForegroundColor Yellow
-    Write-Host ''
-    exit 0
+    $action = Resolve-DependencyAction -InstallDependencies $InstallDependencies -Force $Force.IsPresent
+    if ($action -eq 'prompt') {
+        $consent = Read-Host '  Attempt automatic install via winget now? [Y/N]'
+        $action  = if ($consent -match '^[Yy]') { 'install' } else { 'abort' }
+    }
+    if ($action -eq 'install' -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Ok 'Installing .NET 10 Hosting Bundle via winget'
+        if ($PSCmdlet.ShouldProcess('.NET 10 Hosting Bundle', 'Install via winget')) {
+            Start-Process -FilePath winget -ArgumentList @(
+                'install','--id','Microsoft.DotNet.HostingBundle.10','-e',
+                '--accept-source-agreements','--accept-package-agreements') -Wait -NoNewWindow
+        }
+        # STAB-006: re-query the registry; only proceed if a 10.x bundle is now present.
+        $hostingBundle = Get-ItemProperty `
+            -Path 'HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedhost' `
+            -ErrorAction SilentlyContinue
+        $bundleVer  = if ($hostingBundle) { $hostingBundle.Version } else { $null }
+        $bundleDiag = Get-HostingBundleDiagnostic -InstalledVersion $bundleVer
+        if ($bundleDiag) {
+            Abort "$bundleDiag Re-run the installer after a successful Hosting Bundle install (a reboot may be required)."
+        }
+    } else {
+        Write-Host '  Re-run this installer after the Hosting Bundle is installed.' -ForegroundColor Yellow
+        exit 0
+    }
 }
+$installedRuntime = $bundleVer
 Write-Ok ".NET Hosting Bundle $installedRuntime detected"
 
 # Windows Event Log source (D-07 runtime half from plan 08-03).
@@ -972,6 +1258,12 @@ $isDowngrade   = $false
 $isReconfigure = $false
 
 if ($siteExists) {
+    # STAB-002: an explicit -Reconfigure forces reconfigure mode on an existing install
+    # (e.g. to re-apply config after editing), even when the incoming version differs.
+    # Only meaningful when a deployment already exists — a fresh install ignores it so
+    # the file mirror still runs.
+    if ($Reconfigure) { $isReconfigure = $true }
+
     $deployedExe     = Join-Path $PhysicalPath 'PassReset.Web.exe'
     $currentVersion  = if (Test-Path $deployedExe) {
                            (Get-Item $deployedExe).VersionInfo.FileVersion -replace '\.0$'
@@ -1123,26 +1415,16 @@ if ($siteExists -and (Test-Path $prodConfig)) {
 # plan 08-05 and the drift-check rewrite in plan 08-06.
 
 Write-Step 'Resolving config sync mode'
-if (-not $ConfigSync) {
-    if ($Force) {
-        $ConfigSync = 'Merge'
-        Write-Ok "-Force specified - defaulting to -ConfigSync Merge"
-    } elseif ($siteExists) {
-        # Upgrade detected, interactive session — prompt per D-13.
-        $reply = Read-Host '  Config sync: [M]erge additions / [R]eview each / [S]kip? [M]'
-        $ConfigSync = switch -Regex ($reply) {
-            '^[Rr]' { 'Review' }
-            '^[Ss]' { 'None' }
-            default { 'Merge' }
-        }
-        Write-Ok "Config sync mode: $ConfigSync"
-    } else {
-        # Fresh install — template was just copied verbatim; nothing to sync.
-        $ConfigSync = 'None'
-    }
-} else {
-    Write-Ok "Config sync mode (from -ConfigSync param): $ConfigSync"
-}
+# Upgrade detection works across all hosting modes (#24 / STAB-010): an existing
+# IIS site OR a live appsettings.Production.json already in the target folder
+# => upgrade. Keying off $siteExists alone meant Service/Console upgrades always
+# fell through to the fresh-install branch and skipped the additive sync.
+$prodConfigForResolve = Join-Path $PhysicalPath 'appsettings.Production.json'
+$isUpgrade   = $siteExists -or (Test-Path $prodConfigForResolve)
+$interactive = -not $Force -and -not [System.Console]::IsInputRedirected
+$ConfigSync  = Resolve-ConfigSyncMode -Requested $ConfigSync -Force ([bool]$Force) `
+                   -IsUpgrade $isUpgrade -Interactive $interactive
+Write-Ok "Config sync mode: $ConfigSync"
 
 if ($HostingMode -eq 'IIS') {
 
@@ -1418,20 +1700,36 @@ if ($CertThumbprint -and $HttpPort -le 0) {
         Write-Ok 'Removed HTTP binding (HTTPS-only mode: -HttpPort 0)'
     }
 } elseif ($CertThumbprint) {
-    # Ensure the HTTP binding exists on the configured port so ASP.NET Core
+    # Ensure the HTTP binding exists on the site's *resolved* port so ASP.NET Core
     # UseHttpsRedirection() can receive and redirect plain-HTTP requests.
+    # STAB-001: must be $selectedHttpPort (alternate port chosen on a port-80 conflict),
+    # NOT the original $HttpPort param — otherwise we re-bind an occupied port 80.
     $existingHttp = @(Get-IISSiteBinding -Name $SiteName -Protocol http -ErrorAction SilentlyContinue) |
-        Where-Object { $_.BindingInformation -match ":${HttpPort}:" }
+        Where-Object { $_.BindingInformation -match ":${selectedHttpPort}:" }
     if (-not $existingHttp) {
-        New-IISSiteBinding -Name $SiteName -BindingInformation "*:${HttpPort}:" -Protocol http | Out-Null
-        Write-Ok "HTTP :$HttpPort binding retained for HTTP→HTTPS redirect"
+        New-IISSiteBinding -Name $SiteName -BindingInformation "*:${selectedHttpPort}:" -Protocol http | Out-Null
+        Write-Ok "HTTP :$selectedHttpPort binding retained for HTTP→HTTPS redirect"
     } else {
-        Write-Ok "HTTP :$HttpPort binding present (HTTP→HTTPS redirect active)"
+        Write-Ok "HTTP :$selectedHttpPort binding present (HTTP→HTTPS redirect active)"
     }
 }
 
 # STAB-001 D-03: announce the reachable URLs so operators don't have to inspect IIS.
+# STAB-019 / host-header: derive the announce + health host from the actual IIS
+# binding so custom host headers (e.g. passreset.corp.local) are honored. Prefer
+# the HTTPS binding host when a cert is bound (health check targets HTTPS), else the
+# HTTP binding host, else the machine name. Strict-mode guard: assign the
+# Select-Object result to a local and null-check before touching .BindingInformation.
 $hostHeader = $env:COMPUTERNAME
+$httpsB = @(Get-IISSiteBinding -Name $SiteName -Protocol https -ErrorAction SilentlyContinue) | Select-Object -First 1
+$httpB  = @(Get-IISSiteBinding -Name $SiteName -Protocol http  -ErrorAction SilentlyContinue) | Select-Object -First 1
+$httpsBindingInfo = if ($httpsB) { $httpsB.BindingInformation } else { $null }
+$httpBindingInfo  = if ($httpB)  { $httpB.BindingInformation }  else { $null }
+if ($CertThumbprint -and $httpsBindingInfo) {
+    $hostHeader = Resolve-HealthHostHeader -BindingInformation $httpsBindingInfo -Fallback $env:COMPUTERNAME
+} elseif ($httpBindingInfo) {
+    $hostHeader = Resolve-HealthHostHeader -BindingInformation $httpBindingInfo -Fallback $env:COMPUTERNAME
+}
 if (-not $siteExists) {
     Write-Ok "PassReset reachable at http://${hostHeader}:${selectedHttpPort}/"
 } else {
@@ -1452,6 +1750,48 @@ if (-not $siteExists) {
 }
 if ($CertThumbprint) {
     Write-Ok "PassReset reachable at https://${hostHeader}:${HttpsPort}/ (HTTPS binding configured)"
+}
+
+# STAB-016: validate binding/redirect consistency and emit a structured, secret-free
+# final binding configuration block (warn-not-block per D-13).
+$allBindings = @(Get-IISSiteBinding -Name $SiteName -ErrorAction SilentlyContinue) |
+    ForEach-Object {
+        [pscustomobject]@{ protocol = $_.Protocol; bindingInformation = $_.BindingInformation }
+    }
+$httpsCheck = Test-HttpsBinding -Bindings $allBindings -HttpsPort $HttpsPort
+
+Write-Host "`n*** FINAL BINDING CONFIGURATION ***" -ForegroundColor Cyan
+foreach ($b in $allBindings) {
+    $port = ($b.bindingInformation -split ':')[1]
+    if ($b.protocol -eq 'https') {
+        $thumbShort = if ($CertThumbprint) { $CertThumbprint.Substring(0, [Math]::Min(8, $CertThumbprint.Length)) } else { '(none)' }
+        Write-Ok "Binding: protocol=https, port=$port, host=* (cert thumbprint: $thumbShort...)"
+    } else {
+        Write-Ok "Binding: protocol=http,  port=$port, host=* (HTTP->HTTPS redirect target: https://${hostHeader}:${HttpsPort})"
+    }
+}
+
+if ($httpsCheck.HasHttps) {
+    Write-Ok "HTTPS binding verified on ${SiteName}:${HttpsPort}"
+} else {
+    Write-Warn "HTTPS binding missing on ${SiteName}:${HttpsPort} — UseHttpsRedirection() will redirect to a non-existent binding"
+}
+
+# Recommend EnableHttpsRedirect when a cert is bound (best-effort read of live config).
+if ($CertThumbprint) {
+    $prodCfgPath = Join-Path $PhysicalPath 'appsettings.Production.json'
+    $redirectOn = $null
+    if (Test-Path $prodCfgPath) {
+        try {
+            $prodCfg = Get-Content $prodCfgPath -Raw | ConvertFrom-Json
+            $redirectOn = $prodCfg.WebSettings.EnableHttpsRedirect
+        } catch { $redirectOn = $null }
+    }
+    if ($redirectOn -ne $true) {
+        Write-Warn "Certificate bound but WebSettings:EnableHttpsRedirect is not 'true' in appsettings.Production.json — set it to enable HTTP->HTTPS redirect and HSTS (will be applied during config sync if missing)."
+    } else {
+        Write-Ok "EnableHttpsRedirect=true — HTTP->HTTPS redirect and HSTS active"
+    }
 }
 
 # ----- STAB-019: post-deploy verification -----
@@ -1480,7 +1820,8 @@ if (-not $SkipHealthCheck) {
         try {
             $lastHealth   = Invoke-WebRequest -Uri "$baseUrl/api/health"   -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
             $lastSettings = Invoke-WebRequest -Uri "$baseUrl/api/password" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-            if ($lastHealth.StatusCode -eq 200 -and $lastSettings.StatusCode -eq 200) {
+            if ($lastHealth.StatusCode -eq 200 -and $lastSettings.StatusCode -eq 200 -and
+                (Test-HealthResponseHealthy -HealthJson $lastHealth.Content)) {
                 $ok = $true
             }
         } catch {
@@ -1489,7 +1830,10 @@ if (-not $SkipHealthCheck) {
     } while (-not $ok -and $attempt -lt $maxAttempts)
 
     if (-not $ok) {
-        $bodySnippet = if ($lastHealth) { $lastHealth.Content } else { "(no response)" }
+        $healthLogsPath = Join-Path $env:SystemDrive 'inetpub\logs\PassReset'
+        $bodySnippet = if ($lastHealth) { $lastHealth.Content } else { '(no response)' }
+        Write-Host ''
+        Write-Host (Get-HealthFailureDiagnostics -BaseUrl $baseUrl -LogsPath $healthLogsPath) -ForegroundColor Yellow
         Write-Error ("Post-deploy health check failed after {0} attempts. Last /api/health response: {1}" -f $maxAttempts, $bodySnippet)
         exit 1
     }
@@ -1732,33 +2076,88 @@ catch {
     }
 }
 
-# ─── 9b. Config sync (schema-driven additive merge — plan 08-05 / STAB-010) ───
-# Walks appsettings.schema.json, adds any missing keys to the operator's live
-# appsettings.Production.json using schema defaults. NEVER modifies existing
-# values (D-13). Arrays atomic (D-14). Obsolete keys reported (Merge) or
-# prompted (Review). $ConfigSync was resolved earlier in the script (Merge /
-# Review / None) based on -ConfigSync param, -Force, or interactive prompt.
+} # end if ($HostingMode -eq 'IIS')
+elseif ($HostingMode -eq 'Service') {
+    if (-not (Test-ServiceModePreflight -CertThumbprint $CertThumbprint -PfxPath $PfxPath -PfxPassword $PfxPassword -ServiceAccount $ServiceAccount -MigrateFromIisSite 'PassReset')) {
+        throw "Service-mode preflight failed. See warnings above. No changes made."
+    }
+    $existingSite = Get-Website -Name 'PassReset' -ErrorAction SilentlyContinue
+    if ($existingSite) {
+        Write-Host "Migrating from IIS: tearing down existing site..." -ForegroundColor Yellow
+        Stop-Website -Name 'PassReset' -ErrorAction SilentlyContinue
+        Remove-Website -Name 'PassReset' -ErrorAction SilentlyContinue
+        if (Get-IISAppPool -Name $AppPoolName -ErrorAction SilentlyContinue) {
+            Remove-WebAppPool -Name $AppPoolName
+        }
+    }
+    Install-AsWindowsService `
+        -BinaryPath (Join-Path $PhysicalPath 'PassReset.Web.exe') `
+        -ServiceAccount $ServiceAccount `
+        -ServicePassword $ServicePassword
 
-if ($siteExists -and (Test-Path $prodConfig)) {
+    # STAB-019 #34: verify the self-hosted service answers /api/health (healthy aggregate).
+    # Service mode binds Kestrel HTTPS on IPAddress.Any:443 (Program.cs, gated on the
+    # required cert), so $HttpsPort (default 443) is the listener port. There is no HTTP
+    # listener in Service mode; the http branch is a defensive fallback only.
+    $svcBase = if ($CertThumbprint) { "https://${env:COMPUTERNAME}:${HttpsPort}" } else { "http://${env:COMPUTERNAME}:${selectedHttpPort}" }
+    if (-not $SkipHealthCheck) {
+        Write-Step "Verifying service at $svcBase/api/health (up to 10 x 2s)"
+        $svcOk = $false
+        for ($i = 1; $i -le 10 -and -not $svcOk; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+                $r = Invoke-WebRequest -Uri "$svcBase/api/health" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+                if ($r.StatusCode -eq 200 -and (Test-HealthResponseHealthy -HealthJson $r.Content)) { $svcOk = $true }
+            } catch { Write-Warning ("Attempt {0}/10: {1}" -f $i, $_.Exception.Message) }
+        }
+        if (-not $svcOk) {
+            Write-Host (Get-HealthFailureDiagnostics -BaseUrl $svcBase -LogsPath (Join-Path $PhysicalPath 'logs')) -ForegroundColor Yellow
+            Write-Error 'Service-mode post-deploy health check failed.'
+            exit 1
+        }
+        Write-Ok "Service healthy at $svcBase/api/health"
+    } else {
+        Write-Step 'Skipping service health check (-SkipHealthCheck)'
+    }
+}
+elseif ($HostingMode -eq 'Console') {
+    Write-Host "Console mode: files copied to $PhysicalPath." -ForegroundColor Cyan
+    Write-Host "To start manually: dotnet '$PhysicalPath\PassReset.Web.dll'" -ForegroundColor Cyan
+    Write-Host "Console mode: app is not auto-started, so no health check runs." -ForegroundColor Cyan
+    Write-Host "After starting it manually, verify: Invoke-WebRequest https://localhost:${HttpsPort}/api/health" -ForegroundColor Cyan
+}
+# ─── end IIS hosting block ───
+
+# ─── 9b/9c. Config sync + drift check (ALL hosting modes — STAB-010/STAB-012) ──
+# Runs for IIS, Service, AND Console. Moved out of the IIS-only branch (#24) so
+# Service/Console upgrades actually sync; previously the resolved $ConfigSync was
+# never applied for those modes. $ConfigSync was resolved earlier
+# (Resolve-ConfigSyncMode). Paths are re-derived from $PhysicalPath rather than
+# relying on IIS-branch locals.
+#
+# 9b — Config sync (schema-driven additive merge — plan 08-05 / STAB-010):
+#   Walks appsettings.schema.json, adds any missing keys to the operator's live
+#   appsettings.Production.json using schema defaults. NEVER modifies existing
+#   values (D-13). Arrays atomic (D-14). Obsolete keys reported (Merge) or
+#   prompted (Review). On fresh installs $ConfigSync is None (no-op) and the
+#   config is the freshly-copied template, so the additive merge changes nothing.
+# 9c — Schema drift check (plan 08-06 / STAB-012):
+#   Purely diagnostic — any mutation is sync's job (9b above). Positioned AFTER
+#   sync so the report reflects the post-sync state: 'Missing' only surfaces when
+#   sync was None or the schema had no default for a required key.
+$prodConfig = Join-Path $PhysicalPath 'appsettings.Production.json'
+$schemaFile = Join-Path $PhysicalPath 'appsettings.schema.json'
+
+if (Test-Path $prodConfig) {
     Write-Step 'Syncing appsettings.Production.json against schema'
-    $schemaFile = Join-Path $PhysicalPath 'appsettings.schema.json'
     Sync-AppSettingsAgainstSchema `
         -SchemaPath $schemaFile `
         -ConfigPath $prodConfig `
         -Mode $ConfigSync
-}
 
-# ─── 9c. Schema drift check (plan 08-06 / STAB-012) ───────────────────────────
-# Runs UNCONDITIONALLY on every upgrade (D-18) - no silent-skip when live
-# parses OK. Schema is the source of truth (D-17). Purely diagnostic - any
-# mutation is sync's job (9b above). Positioned AFTER sync so the report
-# reflects the post-sync state: 'Missing' only surfaces when sync was None or
-# the schema had no default for a required key.
-
-if ($siteExists) {
     Write-Step 'Checking appsettings.Production.json for schema drift'
     $drift = Test-AppSettingsSchemaDrift `
-        -SchemaPath (Join-Path $PhysicalPath 'appsettings.schema.json') `
+        -SchemaPath $schemaFile `
         -ConfigPath $prodConfig
 
     if ($drift.Skipped) {
@@ -1795,43 +2194,22 @@ if ($siteExists) {
         }
     }
 }
-} # end if ($HostingMode -eq 'IIS')
-elseif ($HostingMode -eq 'Service') {
-    if (-not (Test-ServiceModePreflight -CertThumbprint $CertThumbprint -PfxPath $PfxPath -PfxPassword $PfxPassword -ServiceAccount $ServiceAccount -MigrateFromIisSite 'PassReset')) {
-        throw "Service-mode preflight failed. See warnings above. No changes made."
-    }
-    $existingSite = Get-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-    if ($existingSite) {
-        Write-Host "Migrating from IIS: tearing down existing site..." -ForegroundColor Yellow
-        Stop-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-        Remove-Website -Name 'PassReset' -ErrorAction SilentlyContinue
-        if (Get-IISAppPool -Name $AppPoolName -ErrorAction SilentlyContinue) {
-            Remove-WebAppPool -Name $AppPoolName
-        }
-    }
-    Install-AsWindowsService `
-        -BinaryPath (Join-Path $PhysicalPath 'PassReset.Web.exe') `
-        -ServiceAccount $ServiceAccount `
-        -ServicePassword $ServicePassword
-}
-elseif ($HostingMode -eq 'Console') {
-    Write-Host "Console mode: files copied to $PhysicalPath." -ForegroundColor Cyan
-    Write-Host "To start manually: dotnet '$PhysicalPath\PassReset.Web.dll'" -ForegroundColor Cyan
-}
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
 
 Write-Host ''
 Write-Host '======================================================' -ForegroundColor Cyan
-if ($backupPath) {
-    Write-Host '  PassReset upgraded successfully.' -ForegroundColor Green
+$bannerMessage = Get-DoneBannerMessage -BackupPath $backupPath -IsReconfigure $isReconfigure
+Write-Host "  $bannerMessage" -ForegroundColor Green
+if ($backupPath -and -not $isReconfigure) {
     Write-Host ''
     Write-Host '  Backup of previous installation:' -ForegroundColor Yellow
     Write-Host "    $backupPath"                    -ForegroundColor Yellow
     Write-Host '  To roll back manually: stop the site, robocopy the backup'
     Write-Host '  folder back to $PhysicalPath, then start the site.'
-} else {
-    Write-Host '  PassReset installed successfully.' -ForegroundColor Green
+} elseif ($backupPath -and $isReconfigure) {
+    Write-Host ''
+    Write-Host '  Reconfigure mode: files were not mirrored; existing deployment preserved.' -ForegroundColor Yellow
 }
 Write-Host ''
 Write-Host '  Next steps:' -ForegroundColor Yellow

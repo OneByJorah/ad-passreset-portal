@@ -96,6 +96,11 @@ try
         .ValidateOnStart();
     builder.Services.AddSingleton<IValidateOptions<PasswordChangeOptions>, PasswordChangeOptionsValidator>();
 
+    builder.Services.AddOptions<HealthCheckSettings>()
+        .Bind(builder.Configuration.GetSection(nameof(HealthCheckSettings)))
+        .ValidateOnStart();
+    builder.Services.AddSingleton<IValidateOptions<HealthCheckSettings>, HealthCheckSettingsValidator>();
+
     builder.Services.AddOptions<AdminSettings>()
         .Bind(builder.Configuration.GetSection(nameof(AdminSettings)))
         .ValidateOnStart();
@@ -125,6 +130,15 @@ try
     {
         c.BaseAddress = new Uri("https://api.pwnedpasswords.com/");
         c.Timeout = TimeSpan.FromSeconds(5);
+    });
+
+    // STAB-014: reCAPTCHA v3 verification client. Named client (not a static field) so
+    // tests can inject a stub handler to exercise low-score / unreachable fail-safe paths
+    // without hitting Google. PooledConnectionLifetime via the factory respects DNS changes.
+    builder.Services.AddHttpClient("recaptcha", c =>
+    {
+        c.BaseAddress = new Uri("https://www.google.com/");
+        c.Timeout = TimeSpan.FromSeconds(10);
     });
     builder.Services.AddSingleton<PwnedPasswordChecker>(sp =>
     {
@@ -278,8 +292,17 @@ try
                 sp.GetRequiredService<IOptions<PasswordChangeOptions>>(),
                 sp.GetRequiredService<ILogger<LockoutPasswordChangeProvider>>()));
         builder.Services.AddSingleton<IEmailService, NoOpEmailService>();
-        // Expiry service is never wired in debug mode — diagnostics report "not-enabled".
-        builder.Services.AddSingleton<IExpiryServiceDiagnostics>(new NullExpiryServiceDiagnostics());
+        if (expirySettings.Enabled)
+        {
+            builder.Services.AddSingleton<PasswordExpiryNotificationService>();
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<PasswordExpiryNotificationService>());
+            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(sp =>
+                sp.GetRequiredService<PasswordExpiryNotificationService>());
+        }
+        else
+        {
+            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(new NullExpiryServiceDiagnostics());
+        }
         // Health probe — LDAP TCP probe is cross-platform; returns NotConfigured when LdapHostnames empty.
         builder.Services.AddSingleton<IAdConnectivityProbe, LdapTcpProbe>();
     }
