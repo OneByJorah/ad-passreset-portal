@@ -8,6 +8,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(nothing yet)
+
+---
+
+## [2.0.3] — 2026-06-02
+
+Patch release. Fixes a PowerShell 7 installer failure on hosts where `IISAdministration` loads via the Windows PowerShell compatibility session, plus routine dependency updates. No application code changes.
+
 ### Fixed
 
 - **Installer failed during app-pool/site configuration on some hosts** with `Get-IISConfigCollection: Cannot bind parameter 'ConfigElement'. Cannot convert the "Deserialized.Microsoft.Web.Administration.ConfigurationSection" value … to type "Microsoft.Web.Administration.ConfigurationElement"` and a follow-on `The property 'protocol' cannot be found in this object`. Root cause: the inbox `IISAdministration` module declares `CompatiblePSEditions=Desktop`, so PowerShell 7 loaded it through the Windows PowerShell compatibility (WinPSCompat) implicit-remoting session — which serialized every `Microsoft.Web.Administration` object into an inert `Deserialized.*` property bag that the config-API cmdlets can't bind and that loses live properties like `.Protocol`. The installer now imports `IISAdministration`/`WebAdministration` with `-SkipEditionCheck` (native in-process load), and `Initialize-IIS` probes the config API after import — if objects still come back deserialized it fails with an actionable message instead of the cryptic binding error. `deploy/Test-PS7Iis.ps1` gained a decisive live-vs-deserialized config-section probe. *(installer)*
