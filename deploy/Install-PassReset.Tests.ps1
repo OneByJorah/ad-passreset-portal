@@ -620,6 +620,23 @@ Describe 'Install-PassReset: health block validation wiring' {
     It 'still bypasses under -SkipHealthCheck' {
         $script:Src | Should -Match 'if \(-not \$SkipHealthCheck\)'
     }
+    # STAB-028: the post-deploy probe is a health check, not a cert-trust test — it must
+    # skip cert validation for HTTPS so a CN/SAN mismatch does not fail a healthy deploy.
+    It 'skips certificate validation on the HTTPS post-deploy probe' {
+        $script:Src | Should -Match 'SkipCertificateCheck'
+    }
+}
+
+Describe 'Install-PassReset: EnableHttpsRedirect check reads the final config [STAB-027]' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    # The recommendation must run AFTER section 7 writes the starter config and 9b syncs it,
+    # not before (which read $null on a fresh install and always warned).
+    It 'positions the EnableHttpsRedirect read after the config-sync section' {
+        $syncIdx     = $script:Src.IndexOf('Syncing appsettings.Production.json against schema')
+        $redirectIdx = $script:Src.IndexOf('EnableHttpsRedirect=true — HTTP->HTTPS redirect and HSTS active')
+        $syncIdx     | Should -BeGreaterThan 0
+        $redirectIdx | Should -BeGreaterThan $syncIdx
+    }
 }
 
 Describe 'Install-PassReset: non-IIS post-deploy reporting' {

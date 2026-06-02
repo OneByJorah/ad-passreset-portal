@@ -1812,22 +1812,10 @@ if ($httpsCheck.HasHttps) {
     Write-Warn "HTTPS binding missing on ${SiteName}:${HttpsPort} — UseHttpsRedirection() will redirect to a non-existent binding"
 }
 
-# Recommend EnableHttpsRedirect when a cert is bound (best-effort read of live config).
-if ($CertThumbprint) {
-    $prodCfgPath = Join-Path $PhysicalPath 'appsettings.Production.json'
-    $redirectOn = $null
-    if (Test-Path $prodCfgPath) {
-        try {
-            $prodCfg = Get-Content $prodCfgPath -Raw | ConvertFrom-Json
-            $redirectOn = $prodCfg.WebSettings.EnableHttpsRedirect
-        } catch { $redirectOn = $null }
-    }
-    if ($redirectOn -ne $true) {
-        Write-Warn "Certificate bound but WebSettings:EnableHttpsRedirect is not 'true' in appsettings.Production.json — set it to enable HTTP->HTTPS redirect and HSTS (will be applied during config sync if missing)."
-    } else {
-        Write-Ok "EnableHttpsRedirect=true — HTTP->HTTPS redirect and HSTS active"
-    }
-}
+# STAB-027: the EnableHttpsRedirect recommendation was MOVED to after the starter
+# config is written (section 7) and config-synced — it previously ran HERE, before the
+# file existed on a fresh install, so it read $null and always warned even when the
+# template sets EnableHttpsRedirect=true. See section 9c below.
 
 # STAB-024: post-deploy verification was MOVED to after "Start site" (section 9).
 # It previously ran HERE — before NTFS perms, secret env-vars, and the pool/site
@@ -2105,14 +2093,23 @@ if (-not $SkipHealthCheck) {
     $lastHealth   = $null
     $lastSettings = $null
 
+    # STAB-028: this is a post-deploy HEALTH probe, not a certificate-trust test. The
+    # health URL is built from the machine/binding host, which legitimately differs from
+    # the certificate's CN/SAN (self-signed lab certs, or a cert issued for the public DNS
+    # name while we probe via COMPUTERNAME). Skip cert validation for the HTTPS probe so a
+    # name/trust mismatch does not fail an otherwise-healthy deployment. Connectivity + a
+    # healthy aggregate status are what we verify.
+    $reqArgs = @{ UseBasicParsing = $true; TimeoutSec = 5; ErrorAction = 'Stop' }
+    if ($baseUrl -like 'https://*') { $reqArgs.SkipCertificateCheck = $true }
+
     Write-Step "Verifying deployment at $baseUrl (up to $maxAttempts x 2s)"
 
     do {
         Start-Sleep -Seconds 2
         $attempt++
         try {
-            $lastHealth   = Invoke-WebRequest -Uri "$baseUrl/api/health"   -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-            $lastSettings = Invoke-WebRequest -Uri "$baseUrl/api/password" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+            $lastHealth   = Invoke-WebRequest -Uri "$baseUrl/api/health"   @reqArgs
+            $lastSettings = Invoke-WebRequest -Uri "$baseUrl/api/password" @reqArgs
             if ($lastHealth.StatusCode -eq 200 -and $lastSettings.StatusCode -eq 200 -and
                 (Test-HealthResponseHealthy -HealthJson $lastHealth.Content)) {
                 $ok = $true
@@ -2181,12 +2178,16 @@ elseif ($HostingMode -eq 'Service') {
     # listener in Service mode; the http branch is a defensive fallback only.
     $svcBase = if ($CertThumbprint) { "https://${env:COMPUTERNAME}:${HttpsPort}" } else { "http://${env:COMPUTERNAME}:${selectedHttpPort}" }
     if (-not $SkipHealthCheck) {
+        # STAB-028: health probe, not a cert-trust test — skip cert validation for HTTPS so a
+        # CN/SAN mismatch (cert issued for a DNS name != COMPUTERNAME) doesn't fail a healthy deploy.
+        $svcReqArgs = @{ UseBasicParsing = $true; TimeoutSec = 5; ErrorAction = 'Stop' }
+        if ($svcBase -like 'https://*') { $svcReqArgs.SkipCertificateCheck = $true }
         Write-Step "Verifying service at $svcBase/api/health (up to 10 x 2s)"
         $svcOk = $false
         for ($i = 1; $i -le 10 -and -not $svcOk; $i++) {
             Start-Sleep -Seconds 2
             try {
-                $r = Invoke-WebRequest -Uri "$svcBase/api/health" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+                $r = Invoke-WebRequest -Uri "$svcBase/api/health" @svcReqArgs
                 if ($r.StatusCode -eq 200 -and (Test-HealthResponseHealthy -HealthJson $r.Content)) { $svcOk = $true }
             } catch { Write-Warning ("Attempt {0}/10: {1}" -f $i, $_.Exception.Message) }
         }
@@ -2272,6 +2273,29 @@ if (Test-Path $prodConfig) {
         if (-not $hasDrift) {
             Write-Ok 'No schema drift detected.'
         }
+    }
+}
+
+# ─── 9d. EnableHttpsRedirect recommendation (STAB-027) ────────────────────────
+# Runs AFTER the starter config is written (section 7) and config-synced (9b), so the
+# read reflects the FINAL file. Previously this ran before section 7 and read $null on a
+# fresh install — warning even though the template sets EnableHttpsRedirect=true.
+if ($CertThumbprint) {
+    $redirectOn = $null
+    if (Test-Path $prodConfig) {
+        try {
+            $prodCfg = Get-Content $prodConfig -Raw | ConvertFrom-Json
+            # WebSettings or EnableHttpsRedirect may be absent under Set-StrictMode — guard.
+            if ($prodCfg.PSObject.Properties.Name -contains 'WebSettings' -and
+                $prodCfg.WebSettings.PSObject.Properties.Name -contains 'EnableHttpsRedirect') {
+                $redirectOn = [bool]$prodCfg.WebSettings.EnableHttpsRedirect
+            }
+        } catch { $redirectOn = $null }
+    }
+    if ($redirectOn -eq $true) {
+        Write-Ok "EnableHttpsRedirect=true — HTTP->HTTPS redirect and HSTS active"
+    } else {
+        Write-Warn "Certificate bound but WebSettings:EnableHttpsRedirect is not 'true' in appsettings.Production.json — set it to enable HTTP->HTTPS redirect and HSTS."
     }
 }
 
