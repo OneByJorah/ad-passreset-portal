@@ -208,25 +208,6 @@ function Restore-StoppedForeignSites {
 
 function Abort       { param([string]$Msg) Restore-StoppedForeignSites; Write-Host "`n[ERR] $Msg`n" -ForegroundColor Red; exit 1 }
 
-function Test-IsDeserializedObject {
-    <#
-        STAB-022: detect objects that crossed the Windows PowerShell compatibility
-        (WinPSCompat) remoting boundary. PS 7 serializes such objects into inert
-        property bags whose type name is prefixed "Deserialized." — these lose live
-        methods/.NET properties and FAIL to bind to cmdlets expecting a live
-        Microsoft.Web.Administration.ConfigurationElement (the 2.0.2 install bug).
-        Returns $false for $null and for any locally-constructed live object.
-    #>
-    param([Parameter(ValueFromPipeline)] $InputObject)
-    process {
-        if ($null -eq $InputObject) { return $false }
-        foreach ($typeName in $InputObject.PSObject.TypeNames) {
-            if ($typeName -like 'Deserialized.*') { return $true }
-        }
-        return $false
-    }
-}
-
 # ─── IIS via Microsoft.Web.Administration.ServerManager (STAB-023) ──────────────
 # These helpers wrap the .NET ServerManager API. They MUST NOT be called at module
 # load time (only inside functions or the main flow below the PASSRESET_TEST_MODE
@@ -235,7 +216,13 @@ function Test-IsDeserializedObject {
 function Get-PassResetServerManager {
     <# Returns a fresh, live ServerManager handle reading current applicationHost.config.
        After CommitChanges() a handle is stale — callers must obtain a new one for the
-       next independent operation. Requires Initialize-IIS to have loaded the assembly. #>
+       next independent operation. Requires Initialize-IIS to have loaded the assembly.
+       Note: the [OutputType] attribute's type is resolved at CALL time, not at
+       function-definition/parse time, so the Pester suite can dot-source this script on
+       hosts without the Microsoft.Web.Administration assembly. Every caller guards on
+       $script:IISAvailable first, and Initialize-IIS loads the assembly before any call —
+       do NOT convert this to a parse-time `using assembly`, which would break the
+       no-IIS test host. #>
     [OutputType([Microsoft.Web.Administration.ServerManager])]
     param()
     return [Microsoft.Web.Administration.ServerManager]::new()
@@ -1651,9 +1638,14 @@ if (-not $siteExists -and $selectedHttpPort -eq 80) {
 $sm = Get-PassResetServerManager
 try {
     if (-not $siteExists) {
-        # Create with a placeholder HTTP binding on the resolved port; the root application
-        # and its '/' virtual directory are created by Sites.Add with the physical path.
-        $site = $sm.Sites.Add($SiteName, "*:${selectedHttpPort}:", $PhysicalPath)
+        # Create with an HTTP binding on the resolved port. Use the unambiguous
+        # SiteCollection.Add(string name, string physicalPath, int port) overload — NOT a
+        # 3-string form (which does not exist). Passing ("*:port:", physicalPath) made
+        # PowerShell bind physicalPath to the int 'port' parameter and throw
+        # "Cannot convert ... 'C:\inetpub\PassReset' ... to type System.Int32". The int cast
+        # pins the correct overload. This creates the site, its root application, root vdir,
+        # and the *:port: http binding in one call.
+        $site = $sm.Sites.Add($SiteName, $PhysicalPath, [int]$selectedHttpPort)
         $site.Applications['/'].ApplicationPoolName = $AppPoolName
         $sm.CommitChanges()
         Write-Ok "Created site $SiteName (HTTP :$selectedHttpPort placeholder)"
@@ -1820,81 +1812,16 @@ if ($httpsCheck.HasHttps) {
     Write-Warn "HTTPS binding missing on ${SiteName}:${HttpsPort} — UseHttpsRedirection() will redirect to a non-existent binding"
 }
 
-# Recommend EnableHttpsRedirect when a cert is bound (best-effort read of live config).
-if ($CertThumbprint) {
-    $prodCfgPath = Join-Path $PhysicalPath 'appsettings.Production.json'
-    $redirectOn = $null
-    if (Test-Path $prodCfgPath) {
-        try {
-            $prodCfg = Get-Content $prodCfgPath -Raw | ConvertFrom-Json
-            $redirectOn = $prodCfg.WebSettings.EnableHttpsRedirect
-        } catch { $redirectOn = $null }
-    }
-    if ($redirectOn -ne $true) {
-        Write-Warn "Certificate bound but WebSettings:EnableHttpsRedirect is not 'true' in appsettings.Production.json — set it to enable HTTP->HTTPS redirect and HSTS (will be applied during config sync if missing)."
-    } else {
-        Write-Ok "EnableHttpsRedirect=true — HTTP->HTTPS redirect and HSTS active"
-    }
-}
+# STAB-027: the EnableHttpsRedirect recommendation was MOVED to after the starter
+# config is written (section 7) and config-synced — it previously ran HERE, before the
+# file existed on a fresh install, so it read $null and always warned even when the
+# template sets EnableHttpsRedirect=true. See section 9c below.
 
-# ----- STAB-019: post-deploy verification -----
-# Verify the freshly deployed app responds on /api/health + /api/password before
-# declaring success. Retries 10x at 2s intervals (~20s worst case, matches AppPool
-# cold-start). Hard-fails with exit 1 on final failure. Runs under -Force (D-06/D-07).
-# Only -SkipHealthCheck (air-gapped hosts) bypasses (D-10).
-if (-not $SkipHealthCheck) {
-    $baseUrl = if ($CertThumbprint -and $HttpsPort) {
-        "https://${hostHeader}:${HttpsPort}"
-    } else {
-        "http://${hostHeader}:${selectedHttpPort}"
-    }
-
-    $maxAttempts  = 10
-    $attempt      = 0
-    $ok           = $false
-    $lastHealth   = $null
-    $lastSettings = $null
-
-    Write-Step "Verifying deployment at $baseUrl (up to $maxAttempts x 2s)"
-
-    do {
-        Start-Sleep -Seconds 2
-        $attempt++
-        try {
-            $lastHealth   = Invoke-WebRequest -Uri "$baseUrl/api/health"   -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-            $lastSettings = Invoke-WebRequest -Uri "$baseUrl/api/password" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-            if ($lastHealth.StatusCode -eq 200 -and $lastSettings.StatusCode -eq 200 -and
-                (Test-HealthResponseHealthy -HealthJson $lastHealth.Content)) {
-                $ok = $true
-            }
-        } catch {
-            Write-Warning ("Attempt {0}/{1}: {2}" -f $attempt, $maxAttempts, $_.Exception.Message)
-        }
-    } while (-not $ok -and $attempt -lt $maxAttempts)
-
-    if (-not $ok) {
-        $healthLogsPath = Join-Path $env:SystemDrive 'inetpub\logs\PassReset'
-        $bodySnippet = if ($lastHealth) { $lastHealth.Content } else { '(no response)' }
-        Write-Host ''
-        Write-Host (Get-HealthFailureDiagnostics -BaseUrl $baseUrl -LogsPath $healthLogsPath) -ForegroundColor Yellow
-        Write-Error ("Post-deploy health check failed after {0} attempts. Last /api/health response: {1}" -f $maxAttempts, $bodySnippet)
-        exit 1
-    }
-
-    try {
-        $body  = $lastHealth.Content | ConvertFrom-Json
-        $ad    = $body.checks.ad.status
-        $smtp  = $body.checks.smtp.status
-        $expir = $body.checks.expiryService.status
-        Write-Ok ("Health OK -- AD: {0}, SMTP: {1}, ExpiryService: {2}" -f $ad, $smtp, $expir)
-    } catch {
-        Write-Warning ("Health endpoint returned 200 but JSON parse failed: {0}" -f $_.Exception.Message)
-        Write-Ok "Health OK (body could not be parsed -- status 200 accepted)"
-    }
-} else {
-    Write-Step "Skipping post-deploy health check (-SkipHealthCheck specified)"
-}
-# ----- /STAB-019 -----
+# STAB-024: post-deploy verification was MOVED to after "Start site" (section 9).
+# It previously ran HERE — before NTFS perms, secret env-vars, and the pool/site
+# .Start() — so on every upgrade the health check hit a stopped site (the app pool
+# and site are stopped earlier to release file locks) and failed. Verification must
+# be the LAST step, after the app is configured AND started. See section 9b below.
 
 # ─── 6. NTFS permissions ──────────────────────────────────────────────────────
 
@@ -2087,17 +2014,21 @@ try {
     try {
         $pool = $sm.ApplicationPools[$AppPoolName]
         $site = $sm.Sites[$SiteName]
-        # .Start() throws if already started/transitioning — tolerate.
-        try { $pool.Start() | Out-Null } catch { Write-Verbose "Pool start: $($_.Exception.Message)" }
-        try { $site.Start() | Out-Null } catch { Write-Verbose "Site start: $($_.Exception.Message)" }
+        # Null-guard the indexer results so a missing pool/site yields a clear error,
+        # not a misleading "call method on null" under Set-StrictMode. .Start() throws if
+        # already started/transitioning — tolerate.
+        if ($null -ne $pool) { try { $pool.Start() | Out-Null } catch { Write-Verbose "Pool start: $($_.Exception.Message)" } }
+        if ($null -ne $site) { try { $site.Start() | Out-Null } catch { Write-Verbose "Site start: $($_.Exception.Message)" } }
     } finally { $sm.Dispose() }
 
     # Give the worker process a moment to actually start (or crash).
     Start-Sleep -Seconds 3
     $smChk = Get-PassResetServerManager
     try {
-        $poolStateAfter = [string]$smChk.ApplicationPools[$AppPoolName].State
-        $siteStateAfter = [string]$smChk.Sites[$SiteName].State
+        $chkPool = $smChk.ApplicationPools[$AppPoolName]
+        $chkSite = $smChk.Sites[$SiteName]
+        $poolStateAfter = if ($null -ne $chkPool) { [string]$chkPool.State } else { 'Missing' }
+        $siteStateAfter = if ($null -ne $chkSite) { [string]$chkSite.State } else { 'Missing' }
     } finally { $smChk.Dispose() }
     if ($poolStateAfter -ne 'Started' -or $siteStateAfter -ne 'Started') {
         throw "Pool state: $poolStateAfter, Site state: $siteStateAfter — expected Started"
@@ -2142,6 +2073,75 @@ catch {
     }
 }
 
+# ─── 9b. Post-deploy verification (STAB-019/STAB-024) ─────────────────────────
+# Runs LAST — after the app pool + site are started (section 9) — so the health
+# check hits a running app. Previously this ran before start/perms/secrets, which
+# made every upgrade's verification fail against a stopped site.
+# Verify the freshly deployed app responds on /api/health + /api/password and that
+# the aggregate health status is healthy. Retries 10x at 2s (~20s, matches AppPool
+# cold-start). Hard-fails with exit 1. Only -SkipHealthCheck (air-gapped) bypasses.
+if (-not $SkipHealthCheck) {
+    $baseUrl = if ($CertThumbprint -and $HttpsPort) {
+        "https://${hostHeader}:${HttpsPort}"
+    } else {
+        "http://${hostHeader}:${selectedHttpPort}"
+    }
+
+    $maxAttempts  = 10
+    $attempt      = 0
+    $ok           = $false
+    $lastHealth   = $null
+    $lastSettings = $null
+
+    # STAB-028: this is a post-deploy HEALTH probe, not a certificate-trust test. The
+    # health URL is built from the machine/binding host, which legitimately differs from
+    # the certificate's CN/SAN (self-signed lab certs, or a cert issued for the public DNS
+    # name while we probe via COMPUTERNAME). Skip cert validation for the HTTPS probe so a
+    # name/trust mismatch does not fail an otherwise-healthy deployment. Connectivity + a
+    # healthy aggregate status are what we verify.
+    $reqArgs = @{ UseBasicParsing = $true; TimeoutSec = 5; ErrorAction = 'Stop' }
+    if ($baseUrl -like 'https://*') { $reqArgs.SkipCertificateCheck = $true }
+
+    Write-Step "Verifying deployment at $baseUrl (up to $maxAttempts x 2s)"
+
+    do {
+        Start-Sleep -Seconds 2
+        $attempt++
+        try {
+            $lastHealth   = Invoke-WebRequest -Uri "$baseUrl/api/health"   @reqArgs
+            $lastSettings = Invoke-WebRequest -Uri "$baseUrl/api/password" @reqArgs
+            if ($lastHealth.StatusCode -eq 200 -and $lastSettings.StatusCode -eq 200 -and
+                (Test-HealthResponseHealthy -HealthJson $lastHealth.Content)) {
+                $ok = $true
+            }
+        } catch {
+            Write-Warning ("Attempt {0}/{1}: {2}" -f $attempt, $maxAttempts, $_.Exception.Message)
+        }
+    } while (-not $ok -and $attempt -lt $maxAttempts)
+
+    if (-not $ok) {
+        $healthLogsPath = Join-Path $env:SystemDrive 'inetpub\logs\PassReset'
+        $bodySnippet = if ($lastHealth) { $lastHealth.Content } else { '(no response)' }
+        Write-Host ''
+        Write-Host (Get-HealthFailureDiagnostics -BaseUrl $baseUrl -LogsPath $healthLogsPath) -ForegroundColor Yellow
+        Write-Error ("Post-deploy health check failed after {0} attempts. Last /api/health response: {1}" -f $maxAttempts, $bodySnippet)
+        exit 1
+    }
+
+    try {
+        $body  = $lastHealth.Content | ConvertFrom-Json
+        $ad    = $body.checks.ad.status
+        $smtp  = $body.checks.smtp.status
+        $expir = $body.checks.expiryService.status
+        Write-Ok ("Health OK -- AD: {0}, SMTP: {1}, ExpiryService: {2}" -f $ad, $smtp, $expir)
+    } catch {
+        Write-Warning ("Health endpoint returned 200 but JSON parse failed: {0}" -f $_.Exception.Message)
+        Write-Ok "Health OK (body could not be parsed -- status 200 accepted)"
+    }
+} else {
+    Write-Step "Skipping post-deploy health check (-SkipHealthCheck specified)"
+}
+
 } # end if ($HostingMode -eq 'IIS')
 elseif ($HostingMode -eq 'Service') {
     if (-not (Test-ServiceModePreflight -CertThumbprint $CertThumbprint -PfxPath $PfxPath -PfxPassword $PfxPassword -ServiceAccount $ServiceAccount -MigrateFromIisSite 'PassReset')) {
@@ -2178,12 +2178,16 @@ elseif ($HostingMode -eq 'Service') {
     # listener in Service mode; the http branch is a defensive fallback only.
     $svcBase = if ($CertThumbprint) { "https://${env:COMPUTERNAME}:${HttpsPort}" } else { "http://${env:COMPUTERNAME}:${selectedHttpPort}" }
     if (-not $SkipHealthCheck) {
+        # STAB-028: health probe, not a cert-trust test — skip cert validation for HTTPS so a
+        # CN/SAN mismatch (cert issued for a DNS name != COMPUTERNAME) doesn't fail a healthy deploy.
+        $svcReqArgs = @{ UseBasicParsing = $true; TimeoutSec = 5; ErrorAction = 'Stop' }
+        if ($svcBase -like 'https://*') { $svcReqArgs.SkipCertificateCheck = $true }
         Write-Step "Verifying service at $svcBase/api/health (up to 10 x 2s)"
         $svcOk = $false
         for ($i = 1; $i -le 10 -and -not $svcOk; $i++) {
             Start-Sleep -Seconds 2
             try {
-                $r = Invoke-WebRequest -Uri "$svcBase/api/health" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+                $r = Invoke-WebRequest -Uri "$svcBase/api/health" @svcReqArgs
                 if ($r.StatusCode -eq 200 -and (Test-HealthResponseHealthy -HealthJson $r.Content)) { $svcOk = $true }
             } catch { Write-Warning ("Attempt {0}/10: {1}" -f $i, $_.Exception.Message) }
         }
@@ -2269,6 +2273,29 @@ if (Test-Path $prodConfig) {
         if (-not $hasDrift) {
             Write-Ok 'No schema drift detected.'
         }
+    }
+}
+
+# ─── 9d. EnableHttpsRedirect recommendation (STAB-027) ────────────────────────
+# Runs AFTER the starter config is written (section 7) and config-synced (9b), so the
+# read reflects the FINAL file. Previously this ran before section 7 and read $null on a
+# fresh install — warning even though the template sets EnableHttpsRedirect=true.
+if ($CertThumbprint) {
+    $redirectOn = $null
+    if (Test-Path $prodConfig) {
+        try {
+            $prodCfg = Get-Content $prodConfig -Raw | ConvertFrom-Json
+            # WebSettings or EnableHttpsRedirect may be absent under Set-StrictMode — guard.
+            if ($prodCfg.PSObject.Properties.Name -contains 'WebSettings' -and
+                $prodCfg.WebSettings.PSObject.Properties.Name -contains 'EnableHttpsRedirect') {
+                $redirectOn = [bool]$prodCfg.WebSettings.EnableHttpsRedirect
+            }
+        } catch { $redirectOn = $null }
+    }
+    if ($redirectOn -eq $true) {
+        Write-Ok "EnableHttpsRedirect=true — HTTP->HTTPS redirect and HSTS active"
+    } else {
+        Write-Warn "Certificate bound but WebSettings:EnableHttpsRedirect is not 'true' in appsettings.Production.json — set it to enable HTTP->HTTPS redirect and HSTS."
     }
 }
 

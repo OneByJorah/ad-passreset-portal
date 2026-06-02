@@ -70,10 +70,36 @@ function Abort       { param([string]$Msg) Write-Host "`n[ERR] $Msg`n" -Foregrou
 
 # --- Detect what exists -------------------------------------------------------
 
-Import-Module WebAdministration -ErrorAction SilentlyContinue
+# STAB-025: drive IIS through the Microsoft.Web.Administration ServerManager .NET API,
+# not the IISAdministration / WebAdministration modules. On PowerShell 7 those modules
+# load via the WinPSCompat session: the IIS:\ PSDrive is not proxied at all (so
+# Test-Path "IIS:\Sites\..." silently returns $false and the uninstaller no-ops), and the
+# Web* site/pool cmdlets return/consume inert Deserialized.* objects. The .NET assembly
+# loads in-process under CoreCLR with live objects on every host (same fix as the installer).
+$script:IisAvailable = $false
+$mwaPath = Join-Path $env:windir 'system32\inetsrv\Microsoft.Web.Administration.dll'
+try {
+    Add-Type -Path $mwaPath -ErrorAction Stop
+    $script:IisAvailable = $true
+} catch {
+    Write-Warn "Could not load Microsoft.Web.Administration.dll from '$mwaPath' — IIS site/pool removal will be skipped. ($($_.Exception.Message))"
+}
 
-$siteExists = Test-Path "IIS:\Sites\$SiteName"
-$poolExists = Test-Path "IIS:\AppPools\$AppPoolName"
+function Get-PassResetServerManager {
+    [OutputType([Microsoft.Web.Administration.ServerManager])]
+    param()
+    return [Microsoft.Web.Administration.ServerManager]::new()
+}
+
+$siteExists = $false
+$poolExists = $false
+if ($script:IisAvailable) {
+    $sm = Get-PassResetServerManager
+    try {
+        $siteExists = ($null -ne $sm.Sites[$SiteName])
+        $poolExists = ($null -ne $sm.ApplicationPools[$AppPoolName])
+    } finally { $sm.Dispose() }
+}
 $pathExists = Test-Path $PhysicalPath
 
 # Windows Service hosting mode (Phase 14): the installer may have registered a
@@ -155,13 +181,20 @@ if ($svcExists) {
 Write-Step "Removing IIS site: $SiteName"
 
 if ($siteExists) {
-    $siteState = (Get-WebsiteState -Name $SiteName).Value
-    if ($siteState -eq 'Started') {
-        Stop-Website -Name $SiteName
-        Write-Ok "Stopped site $SiteName"
-    }
-    Remove-Website -Name $SiteName
-    Write-Ok "Removed IIS site $SiteName"
+    # STAB-025: stop + remove the site via ServerManager, commit once.
+    $sm = Get-PassResetServerManager
+    try {
+        $site = $sm.Sites[$SiteName]
+        if ($null -ne $site) {
+            if ($site.State -eq [Microsoft.Web.Administration.ObjectState]::Started) {
+                try { $site.Stop() | Out-Null; Write-Ok "Stopped site $SiteName" }
+                catch { Write-Warn "Could not stop site ${SiteName}: $($_.Exception.Message)" }
+            }
+            $sm.Sites.Remove($site)
+            $sm.CommitChanges()
+            Write-Ok "Removed IIS site $SiteName"
+        }
+    } finally { $sm.Dispose() }
 } else {
     Write-Warn "IIS site '$SiteName' not found — skipping"
 }
@@ -171,13 +204,20 @@ if ($siteExists) {
 Write-Step "Removing app pool: $AppPoolName"
 
 if ($poolExists) {
-    $poolState = (Get-WebAppPoolState -Name $AppPoolName).Value
-    if ($poolState -eq 'Started') {
-        Stop-WebAppPool -Name $AppPoolName
-        Write-Ok "Stopped app pool $AppPoolName"
-    }
-    Remove-WebAppPool -Name $AppPoolName
-    Write-Ok "Removed app pool $AppPoolName"
+    # STAB-025: stop + remove the app pool via ServerManager, commit once.
+    $sm = Get-PassResetServerManager
+    try {
+        $pool = $sm.ApplicationPools[$AppPoolName]
+        if ($null -ne $pool) {
+            if ($pool.State -eq [Microsoft.Web.Administration.ObjectState]::Started) {
+                try { $pool.Stop() | Out-Null; Write-Ok "Stopped app pool $AppPoolName" }
+                catch { Write-Warn "Could not stop app pool ${AppPoolName}: $($_.Exception.Message)" }
+            }
+            $sm.ApplicationPools.Remove($pool)
+            $sm.CommitChanges()
+            Write-Ok "Removed app pool $AppPoolName"
+        }
+    } finally { $sm.Dispose() }
 } else {
     Write-Warn "App pool '$AppPoolName' not found — skipping"
 }

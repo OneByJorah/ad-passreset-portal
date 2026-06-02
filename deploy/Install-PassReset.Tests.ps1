@@ -620,6 +620,23 @@ Describe 'Install-PassReset: health block validation wiring' {
     It 'still bypasses under -SkipHealthCheck' {
         $script:Src | Should -Match 'if \(-not \$SkipHealthCheck\)'
     }
+    # STAB-028: the post-deploy probe is a health check, not a cert-trust test — it must
+    # skip cert validation for HTTPS so a CN/SAN mismatch does not fail a healthy deploy.
+    It 'skips certificate validation on the HTTPS post-deploy probe' {
+        $script:Src | Should -Match 'SkipCertificateCheck'
+    }
+}
+
+Describe 'Install-PassReset: EnableHttpsRedirect check reads the final config [STAB-027]' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    # The recommendation must run AFTER section 7 writes the starter config and 9b syncs it,
+    # not before (which read $null on a fresh install and always warned).
+    It 'positions the EnableHttpsRedirect read after the config-sync section' {
+        $syncIdx     = $script:Src.IndexOf('Syncing appsettings.Production.json against schema')
+        $redirectIdx = $script:Src.IndexOf('EnableHttpsRedirect=true — HTTP->HTTPS redirect and HSTS active')
+        $syncIdx     | Should -BeGreaterThan 0
+        $redirectIdx | Should -BeGreaterThan $syncIdx
+    }
 }
 
 Describe 'Install-PassReset: non-IIS post-deploy reporting' {
@@ -644,28 +661,6 @@ Describe 'Install-PassReset: STAB-019 regression guards' {
     }
 }
 
-# ── STAB-022 / 2.0.2 install bug: IISAdministration loaded via WinPSCompat returns
-#    Deserialized.* objects that break Get-IISConfigCollection + $_.Protocol. ────────
-
-Describe 'Install-PassReset: Test-IsDeserializedObject' {
-    It 'returns $true for a Deserialized.* typed object name' {
-        # Synthesize an object whose type name starts with Deserialized. (what WinPSCompat yields).
-        $fake = [pscustomobject]@{ x = 1 }
-        # Re-tag its type name to simulate a WinPSCompat-deserialized object.
-        $fake.PSObject.TypeNames.Insert(0, 'Deserialized.Microsoft.Web.Administration.ConfigurationSection')
-        Test-IsDeserializedObject -InputObject $fake | Should -BeTrue
-    }
-    It 'returns $false for a live local object' {
-        Test-IsDeserializedObject -InputObject ([pscustomobject]@{ x = 1 }) | Should -BeFalse
-    }
-    It 'returns $false for $null (nothing to classify)' {
-        Test-IsDeserializedObject -InputObject $null | Should -BeFalse
-    }
-    It 'returns $false for a plain string' {
-        Test-IsDeserializedObject -InputObject 'system.applicationHost/sites' | Should -BeFalse
-    }
-}
-
 Describe 'Install-PassReset: Initialize-IIS loads the Microsoft.Web.Administration assembly' {
     BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
     # STAB-023: Initialize-IIS now Add-Type's the ServerManager assembly in-process
@@ -685,5 +680,18 @@ Describe 'Install-PassReset: Initialize-IIS loads the Microsoft.Web.Administrati
     }
     It 'uses the ServerManager .NET type to drive IIS' {
         $script:Src | Should -Match 'Microsoft\.Web\.Administration\.ServerManager'
+    }
+}
+
+Describe 'Install-PassReset: Sites.Add uses the (name, physicalPath, int port) overload [STAB-026]' {
+    BeforeAll { $script:Src = Get-Content "$PSScriptRoot/Install-PassReset.ps1" -Raw }
+    # The 3-string form Sites.Add(name, "*:port:", physicalPath) does NOT exist; PowerShell
+    # resolved it to Add(name, physicalPath, int port) and threw "Cannot convert ...
+    # 'C:\inetpub\PassReset' ... to type System.Int32". The [int] cast pins the right overload.
+    It 'casts the port argument to [int] so the correct overload is selected' {
+        $script:Src | Should -Match '\$sm\.Sites\.Add\(\$SiteName,\s*\$PhysicalPath,\s*\[int\]\$selectedHttpPort\)'
+    }
+    It 'does not pass a "*:port:" binding string as a positional arg to Sites.Add' {
+        $script:Src | Should -Not -Match '\$sm\.Sites\.Add\(\$SiteName,\s*"\*:'
     }
 }

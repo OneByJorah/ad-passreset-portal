@@ -943,3 +943,58 @@ but-wrong lesson. The user's two manual probes (`Import-Module WebAdministration
 the `-SkipEditionCheck` PSSnapIn throw) were what actually pinned the root cause. For
 host-environment-dependent fixes I cannot reproduce locally, get the diagnostic output
 BEFORE concluding — and hold the tag until the user confirms on the affected host.
+
+---
+
+## 2026-06-02 — Verify LAST: post-deploy health check must run after start + full config (STAB-024)
+
+**What happened:** The installer's "Verifying deployment" health check (STAB-019) was
+positioned in the script BEFORE the sections that set NTFS permissions, wrote secret
+app-pool environment variables, and `.Start()`-ed the app pool + site. On upgrade the
+pool/site are deliberately stopped early to release file locks for the file copy — so the
+health check always hit a stopped site and failed. It only sometimes passed on fresh
+installs (where the new site auto-started). Fix: move verification to be the LAST step in
+the IIS block, after start.
+
+**The trap:** a verification/health step is only meaningful at the point where the system
+is in its final running state. When code is added in phases (STAB-019 added verification
+without re-checking the stop→configure→start ordering), a verify step can silently end up
+upstream of the very operations that make the thing healthy. **When you add a "confirm it
+works" step, trace the full ordering: is everything it checks already DONE at that line?**
+For an installer the invariant is: copy → configure (perms, config, secrets) → start →
+THEN verify. Pester source-assertion tests don't catch ordering bugs — only an end-to-end
+run (or careful manual trace of the script's top-to-bottom flow) does.
+
+**Companion (STAB-025):** the uninstaller had the SAME WinPSCompat class of bug as the
+installer (STAB-023) but was missed because the installer fix didn't sweep the uninstaller.
+It detected IIS via the `IIS:\` PSDrive (not proxied through WinPSCompat → silent `$false`)
+and removed via `WebAdministration` cmdlets (deserialized). When you fix a
+host/runtime-compatibility bug in one script, **grep the whole repo for the same pattern**
+— sibling scripts (uninstall, publish, diagnostics) usually share it.
+
+---
+
+## 2026-06-02 — .NET method overloads in PowerShell: pin types, don't assume arity (STAB-026)
+
+**What happened:** `$sm.Sites.Add($SiteName, "*:${port}:", $PhysicalPath)` threw at install
+time: `Cannot convert argument "port" with value "C:\inetpub\PassReset" ... to type
+System.Int32`. I assumed a 3-string overload `Add(name, bindingInformation, physicalPath)`.
+It does NOT exist. The real overload is `Add(string name, string physicalPath, int port)`,
+so PowerShell mapped my `"*:port:"` → physicalPath and `$PhysicalPath` → the `int port`
+slot and failed the coercion. Fix: `$sm.Sites.Add($SiteName, $PhysicalPath, [int]$port)`.
+
+**The trap (third MWA-related miss in this arc — STAB-022/023/026):** when calling an
+overloaded .NET method from PowerShell, the engine picks an overload by best-fit coercion,
+NOT by your intended signature. Two string args next to an `(string, string, int)` vs a
+non-existent `(string, string, string)` silently bind to the wrong slots. I could not
+introspect the real signatures locally (assembly absent on the dev host), and I guessed.
+
+**Rules going forward:**
+1. For overloaded .NET calls, **cast each argument to the exact parameter type** (`[int]`,
+   `[byte[]]`, `[string]`) so overload resolution is unambiguous — especially when adjacent
+   params share compatible types.
+2. **Verify the actual overload set** before calling — `$obj.GetType().GetMethods() | ? Name -eq 'Add' | % ToString()` on a host that has the assembly, or authoritative docs. Do not
+   infer arity from the cmdlet wrapper's parameters (cmdlet params ≠ .NET overloads).
+3. When you can't introspect locally, add a **source-assertion regression test** that pins
+   the call shape (e.g. asserts the `[int]` cast is present), and hold the release for a
+   live dogfood — exactly the loop that caught this.
