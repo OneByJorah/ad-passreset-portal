@@ -92,4 +92,28 @@ public class GoogleRecaptchaVerifierTests
         var v = Build(Json("not-json"), failOpen: true);
         Assert.False(await v.VerifyAsync("tok", "change_password", "1.2.3.4"));
     }
+
+    [Fact]
+    public async Task NetworkThrow_FailOpenFalse_ReturnsFalse()
+    {
+        var handler = new FakeHttpMessageHandler(_ => throw new HttpRequestException("down"));
+        var v = Build(handler, failOpen: false);
+        Assert.False(await v.VerifyAsync("tok", "change_password", "1.2.3.4"));
+    }
+
+    [Fact]
+    public async Task Timeout_FailOpenTrue_ReturnsTrue()
+    {
+        var handler = new FakeHttpMessageHandler(_ => throw new TaskCanceledException());
+        var v = Build(handler, failOpen: true);
+        Assert.True(await v.VerifyAsync("tok", "change_password", "1.2.3.4"));
+    }
+
+    [Fact]
+    public async Task Timeout_FailOpenFalse_ReturnsFalse()
+    {
+        var handler = new FakeHttpMessageHandler(_ => throw new TaskCanceledException());
+        var v = Build(handler, failOpen: false);
+        Assert.False(await v.VerifyAsync("tok", "change_password", "1.2.3.4"));
+    }
 }
