@@ -418,6 +418,7 @@ try
     // Policy names used by the [EnableRateLimiting] attributes on PasswordController.
     const string PasswordRateLimitPolicy = "password-fixed-window";
     const string PwnedCheckRateLimitPolicy = "pwned-check-window";
+    const string StatusRateLimitPolicy = "status-fixed-window";
 
     builder.Services.AddRateLimiter(options =>
     {
@@ -452,6 +453,20 @@ try
                 _ => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit          = 20,
+                    Window               = TimeSpan.FromMinutes(5),
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit           = 0,
+                }));
+
+        // v2.1: the read-only Status Check mirrors the submit-time 5-per-5-min budget but
+        // uses a SEPARATE partition key (prefixed "status:") so a burst of status checks
+        // cannot exhaust a user's password-change budget (and vice versa).
+        options.AddPolicy(StatusRateLimitPolicy, context =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                "status:" + (context.Connection.RemoteIpAddress?.ToString() ?? "unknown"),
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit          = 5,
                     Window               = TimeSpan.FromMinutes(5),
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     QueueLimit           = 0,

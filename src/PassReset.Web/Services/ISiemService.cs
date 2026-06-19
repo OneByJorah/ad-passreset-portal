@@ -37,6 +37,9 @@ public enum SiemEventType
 
     /// <summary>A password-change attempt has entered the controller (correlation anchor).</summary>
     PasswordChangeAttemptStarted,
+
+    /// <summary>A read-only Status Check authenticated successfully (v2.1).</summary>
+    StatusChecked,
 }
 
 /// <summary>
