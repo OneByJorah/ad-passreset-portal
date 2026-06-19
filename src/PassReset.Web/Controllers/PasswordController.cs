@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -31,7 +30,7 @@ public sealed class PasswordController : ControllerBase
     private readonly PasswordChangeOptions _passwordOptions;
     private readonly IHostEnvironment _hostEnvironment;
     private readonly ILogger<PasswordController> _logger;
-    private readonly HttpClient _recaptchaHttp;
+    private readonly IRecaptchaVerifier _recaptchaVerifier;
 
     // Pre-compiled 5-char hex regex for pwned-check prefix validation.
     private static readonly Regex Sha1PrefixRegex =
@@ -49,7 +48,7 @@ public sealed class PasswordController : ControllerBase
         IPwnedPasswordChecker pwnedChecker,
         IOptions<PasswordChangeOptions> passwordOptions,
         IHostEnvironment hostEnvironment,
-        IHttpClientFactory httpClientFactory,
+        IRecaptchaVerifier recaptchaVerifier,
         ILogger<PasswordController> logger)
     {
         _changer         = changer;
@@ -63,8 +62,8 @@ public sealed class PasswordController : ControllerBase
         _pwnedChecker       = pwnedChecker;
         _passwordOptions    = passwordOptions.Value;
         _hostEnvironment    = hostEnvironment;
+        _recaptchaVerifier  = recaptchaVerifier;
         _logger             = logger;
-        _recaptchaHttp      = httpClientFactory.CreateClient("recaptcha");
     }
 
     /// <summary>
@@ -171,7 +170,7 @@ public sealed class PasswordController : ControllerBase
         var recaptchaConfig = settings.Recaptcha;
         if (recaptchaConfig?.Enabled == true && !string.IsNullOrWhiteSpace(recaptchaConfig.PrivateKey))
         {
-            if (!await ValidateRecaptchaAsync(model.Recaptcha, recaptchaConfig, clientIp))
+            if (!await _recaptchaVerifier.VerifyAsync(model.Recaptcha, "change_password", clientIp))
             {
                 Audit("RecaptchaFailed", model.Username, clientIp, SiemEventType.RecaptchaFailed);
                 return BadRequest(ApiResult.InvalidCaptcha());
@@ -255,7 +254,7 @@ public sealed class PasswordController : ControllerBase
         var recaptchaConfig = settings.Recaptcha;
         if (recaptchaConfig?.Enabled == true && !string.IsNullOrWhiteSpace(recaptchaConfig.PrivateKey))
         {
-            if (!await ValidateRecaptchaAsync(model.Recaptcha, recaptchaConfig, clientIp))
+            if (!await _recaptchaVerifier.VerifyAsync(model.Recaptcha, "change_password", clientIp))
             {
                 Audit("StatusRecaptchaFailed", model.Username, clientIp, SiemEventType.RecaptchaFailed);
                 return BadRequest(ApiResult.InvalidCaptcha());
@@ -339,70 +338,4 @@ public sealed class PasswordController : ControllerBase
             ? new ApiErrorItem(ApiErrorCode.Generic, err.Message)
             : err;
 
-    private async Task<bool> ValidateRecaptchaAsync(
-        string token, Recaptcha config, string clientIp)
-    {
-        try
-        {
-            using var content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["secret"]   = config.PrivateKey!,
-                ["response"] = token,
-                ["remoteip"] = clientIp,
-            });
-
-            var response = await _recaptchaHttp.PostAsync("recaptcha/api/siteverify", content);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogError("reCAPTCHA API returned {StatusCode} for IP {ClientIp}",
-                    response.StatusCode, clientIp);
-                if (config.FailOpenOnUnavailable)
-                {
-                    _logger.LogWarning("reCAPTCHA fail-open enabled — allowing request through for IP {ClientIp}", clientIp);
-                    return true;
-                }
-                return false;
-            }
-
-            var json = await response.Content.ReadFromJsonAsync<RecaptchaResponse>();
-            return json?.Success == true
-                && json.Score >= config.ScoreThreshold
-                && string.Equals(json.Action, "change_password", StringComparison.OrdinalIgnoreCase);
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogError(ex, "reCAPTCHA service unreachable for IP {ClientIp}", clientIp);
-            if (config.FailOpenOnUnavailable)
-            {
-                _logger.LogWarning("reCAPTCHA fail-open enabled — allowing request through for IP {ClientIp}", clientIp);
-                return true;
-            }
-            return false;
-        }
-        catch (TaskCanceledException ex)
-        {
-            _logger.LogError(ex, "reCAPTCHA request timed out for IP {ClientIp}", clientIp);
-            if (config.FailOpenOnUnavailable)
-            {
-                _logger.LogWarning("reCAPTCHA fail-open enabled — allowing request through for IP {ClientIp}", clientIp);
-                return true;
-            }
-            return false;
-        }
-        catch (Exception ex)
-        {
-            // Unexpected errors (JSON parse, etc.) — never fail-open
-            _logger.LogWarning(ex, "reCAPTCHA unexpected error for IP {ClientIp}", clientIp);
-            return false;
-        }
-    }
-
-    // Minimal DTO for reCAPTCHA v3 API response deserialization
-    private sealed class RecaptchaResponse
-    {
-        public bool  Success { get; set; }
-        public float Score   { get; set; }
-        public string? Action { get; set; }
-    }
 }

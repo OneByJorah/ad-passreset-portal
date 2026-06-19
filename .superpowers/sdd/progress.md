@@ -1,27 +1,27 @@
-# Carve IPasswordChangeProvider into Cohesive Seams — SDD progress ledger
+# Extract IRecaptchaVerifier Seam — SDD progress ledger
 
-Plan: docs/superpowers/plans/2026-06-19-carve-password-provider-seams.md
-Branch: refactor/carve-password-provider-seams
-Branch base (merge-base with master): ef218af
+Plan: docs/superpowers/plans/2026-06-19-recaptcha-verifier-seam.md
+Branch: refactor/recaptcha-verifier-seam
+Branch base (merge-base with master): 4ccff41
 
 Verification policy (project lesson): run dotnet/pwsh verification INLINE; do NOT
 dispatch nested review-agents — they stall under context-mode hooks. Implementer
 subagents only; controller adjudicates reviews inline.
 
 ## Tasks
-- Task 1: 3 seam interfaces + PasswordDistance free fn — complete (commit 77a0f61, review clean; spec ✅ quality Approved; 6/6 PasswordDistanceTests in PassReset.Tests, old interface untouched)
-- Task 2: retarget adapters/decorators, delete old interface — complete (commit c2e5ceb, review clean; spec ✅ quality Approved; both target builds 0err/0warn; bodies untouched, exactly the forwarding methods deleted. DEVIATION: PasswordPolicyCache lives in PassReset.PasswordProvider not Web — migrated to IPasswordStatusReader HERE (build-necessary, correct). So Task 3 Step 1 is already DONE.)
-- Task 3: retarget consumers + DI rewire + cref cleanup — complete (commit afffcc9, review clean; spec ✅ quality Approved; production grep CLEAN, PassReset.Web 0 err. Single-instance invariant holds: ResolveAdapter returns the singleton concrete shared by all 3 seams; only change seam decorated. 5 crefs fixed. ASP0000 warning is pre-existing.)
-- Task 4: retarget tests + full-suite proof — complete (commit 6a7cc06; controller-verified INLINE: grep CLEAN across all src, full sln build 0err, full suite 375 passed/0 failed/6 skipped — PassReset.Tests 135 (=129+6 new PasswordDistanceTests), Windows 240+5skip, Ldap 1skip. Contract base renamed IPasswordChangerContract. Behavior preserved.)
+- Task 1: IRecaptchaVerifier interface + FakeRecaptchaVerifier — complete (commit a356976, review clean; spec ✅ quality Approved; 2 files, both builds clean)
+- Task 2: GoogleRecaptchaVerifier (TDD, 7 branches) — complete (commits 1d8c93a + ef6df09, review clean; spec ✅ quality Approved; security axes verified inline: fail-open only on non-2xx/HttpRequestException/TaskCanceledException, generic catch unconditionally false, >= threshold, action via parameter. Reviewer's 2 Minor coverage gaps FIXED — added NetworkThrow_FailOpenFalse + 2 Timeout tests; 11/11 pass.)
+- Task 3: wire seam into controller + DI (typed client) — complete (commits 59e7d2c + 8534db6, review clean; spec ✅ quality Approved; both call sites use VerifyAsync(model.Recaptcha,"change_password",clientIp) with enable-gate/Audit/InvalidCaptcha intact; ValidateRecaptchaAsync+RecaptchaResponse+IHttpClientFactory+_recaptchaHttp removed; typed client registered. FIX: null-guard added to verifier (fails CLOSED) clearing 3 CS8602 — NullConfig_ReturnsFalse test, 12/12 pass.)
+- Task 4: migrate controller recaptcha tests to fake + full-suite proof — complete (commit 6584c72, review clean; spec ✅ quality Approved; all 4 boolean mappings verified correct (no false green); assertions unchanged; named-client test replaced w/ GoogleRecaptchaVerifier type check; RecaptchaEnabledFactory untouched; StubRecaptchaHandler/JsonOk deleted. Full suite INLINE: 387 passed/0 failed/6 skipped (135+252+0; +5+1 skip). +12 vs master = new verifier tests.)
 
 ## Minor findings (running)
-- T4: IPasswordChangerContract.cs:42 dangling <see cref="Sut"/> doc comment (pre-existing copy-paste, inert).
-- T4: IPasswordChangerContract has I-prefix but is abstract class (pre-existing naming, inherited from old name).
-- T3: ProviderMode.cs cref now says IPasswordChanger but mode selects the adapter implementing all 3 seams — accuracy nicety, not a defect (old text was equally narrow). Triage at final review.
-- T1: PasswordDistance params named currentPassword/newPassword vs brief's a/b — kept (domain names are clearer, no behavior impact).
-- NOTE for T4: THREE test projects exist — PassReset.Tests (net10.0), PassReset.Tests.Windows (net10.0-windows), PassReset.Tests.Integration.Ldap. Full-suite proof must run the SOLUTION (dotnet test src/PassReset.sln), not one project.
+- T4: RecaptchaVerifier_IsRegistered uses GetService not GetRequiredService (diagnostics nit).
+- T4: test name ..._FailSafeEnabled_Returns200 slightly misleading post-seam (fail-open now verifier-level). Naming judgment.
+- T3: config.PrivateKey! in verifier relies on controller enable-gate (safe today; a direct call w/o gate would send empty key). Optional: ArgumentException guard or XML-doc note. Non-blocking.
+- T3: ctor assignment order cosmetic (reviewer noted, no impact).
 
 
 ## Final whole-branch review — DONE, ready to merge (opus)
-- No Critical/Important. Single-instance invariant verified correct in all 3 DI branches: status+directory seams resolve the SAME singleton concrete adapter the change-decorator chain wraps. Change-only decoration preserved (wrong-pw Status Check still bypasses lockout — unchanged). Levenshtein extraction byte-identical. Old interface deleted outright, no composed marker. Full suite 375 passed/0 failed.
-- Non-blocking follow-ups (optional, not done): (1) reword dangling <see cref="Sut"/> in IPasswordChangerContract.cs:42; (2) optional rename IPasswordChangerContract → PasswordChangerContract (drop I-prefix on abstract class); (3) robustness: ResolveAdapter cast to IDirectoryUserReader would throw if a FUTURE adapter omits that seam — fine today.
+- No Critical/Important. Fail-open security invariant intact on every path (open only on non-2xx/HttpRequestException/TaskCanceledException under FailOpenOnUnavailable; generic catch + null-config + empty-PrivateKey all fail CLOSED). Behavior-preserving; deep seam; controller retains gate+audit+response at both call sites; migrated tests faithful (no false green); fail-open matrix has dedicated unit coverage.
+- Final-review fixes applied (commit 52a3ff4): (1) empty-PrivateKey guard in verifier + dropped `!` (self-contained seam, fails closed) + EmptyPrivateKey_ReturnsFalse test; (2) RecaptchaVerifier_IsRegistered uses GetRequiredService; (3) renamed Recaptcha_ProviderUnreachable_FailSafeEnabled_Returns200 → Recaptcha_VerifierAllows_Returns200.
+- Full solution suite: 388 passed / 0 failed / 6 skipped (135 + 253+5skip + 1skip). +13 vs master's 375 = 13 GoogleRecaptchaVerifier tests. xUnit1051 warnings pre-existing in GenericErrorMappingTests (not from this branch).
