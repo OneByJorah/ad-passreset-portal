@@ -65,3 +65,6 @@ desktop.ini
 *.swp
 *.tmp
 *.temp
+
+# ── Local agent skills / config (not checked in) ─────────────────────────────
+.agents/
