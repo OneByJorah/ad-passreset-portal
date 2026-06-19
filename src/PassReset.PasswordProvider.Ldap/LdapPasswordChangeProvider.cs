@@ -733,4 +733,8 @@ public sealed class LdapPasswordChangeProvider : IPasswordChangeProvider
             return Task.FromResult<PasswordPolicy?>(null);
         }
     }
+
+    /// <inheritdoc />
+    public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
+        => throw new NotImplementedException(); // implemented in Task 2 (LDAP)
 }

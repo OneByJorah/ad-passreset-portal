@@ -335,6 +335,10 @@ public sealed class PasswordChangeProvider : IPasswordChangeProvider
         }
     }
 
+    /// <inheritdoc />
+    public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
+        => throw new NotImplementedException(); // implemented in Task 3 (Windows)
+
     // ─── Private helpers ──────────────────────────────────────────────────────
 
     private bool ValidateUserCredentials(string upn, string currentPassword, PrincipalContext principalContext)

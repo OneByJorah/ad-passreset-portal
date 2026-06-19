@@ -17,6 +17,8 @@ public class LevenshteinTests
         public TimeSpan GetDomainMaxPasswordAge() => TimeSpan.MaxValue;
         public Task<PasswordPolicy?> GetEffectivePasswordPolicyAsync() =>
             Task.FromResult<PasswordPolicy?>(null);
+        public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword) =>
+            Task.FromResult(new PasswordStatus(false, null, null, false, ExpirySource.Unknown, null));
     }
 
     private static int Distance(string a, string b) =>

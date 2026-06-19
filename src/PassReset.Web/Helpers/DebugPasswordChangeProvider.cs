@@ -54,6 +54,22 @@ internal sealed class DebugPasswordChangeProvider : IPasswordChangeProvider
 
     public TimeSpan GetDomainMaxPasswordAge() => TimeSpan.FromDays(90);
 
+    public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
+    {
+        // Magic usernames mirror the existing debug change-flow stubs.
+        var status = username switch
+        {
+            "invalidCredentials" => new PasswordStatus(false, ApiErrorCode.InvalidCredentials, null, false, ExpirySource.Unknown, null),
+            "userNotFound"       => new PasswordStatus(false, ApiErrorCode.UserNotFound,       null, false, ExpirySource.Unknown, null),
+            "neverExpires"       => new PasswordStatus(true,  null, null, true,  ExpirySource.Resolved, DebugPolicy()),
+            _                    => new PasswordStatus(true,  null, DateTimeOffset.UtcNow.AddDays(12), false, ExpirySource.Resolved, DebugPolicy()),
+        };
+        return Task.FromResult(status);
+    }
+
+    private static PasswordPolicy DebugPolicy() => new(
+        MinLength: 12, RequiresComplexity: true, HistoryLength: 24, MinAgeDays: 1, MaxAgeDays: 90);
+
     public Task<PasswordPolicy?> GetEffectivePasswordPolicyAsync() =>
         Task.FromResult<PasswordPolicy?>(new PasswordPolicy(12, true, 24, 1, 90));
 }
