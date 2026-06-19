@@ -7,8 +7,11 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using PassReset.Common;
+using PassReset.Tests.Windows.Fakes;
 using PassReset.Web.Models;
+using PassReset.Web.Services;
 
 namespace PassReset.Tests.Windows.Web.Controllers;
 
@@ -56,14 +59,13 @@ public class RateLimitAndRecaptchaTests
     };
 
     [Fact]
-    public void Recaptcha_NamedHttpClient_IsRegistered()
+    public void RecaptchaVerifier_IsRegistered()
     {
         using var factory = new RateLimitFactory();
-        var clientFactory = factory.Services
-            .GetRequiredService<System.Net.Http.IHttpClientFactory>();
-        var client = clientFactory.CreateClient("recaptcha");
-        Assert.Equal(new Uri("https://www.google.com/"), client.BaseAddress);
-        Assert.Equal(TimeSpan.FromSeconds(10), client.Timeout);
+        using var scope = factory.Services.CreateScope();
+        var verifier = scope.ServiceProvider.GetService<IRecaptchaVerifier>();
+        Assert.NotNull(verifier);
+        Assert.IsType<GoogleRecaptchaVerifier>(verifier);
     }
 
     /// <summary>
@@ -177,33 +179,14 @@ public class RateLimitAndRecaptchaTests
     }
 
     /// <summary>
-    /// STAB-014: scriptable HttpMessageHandler so reCAPTCHA verification can be driven to
-    /// any siteverify outcome (low score, HTTP 500, network throw) without hitting Google.
-    /// </summary>
-    private sealed class StubRecaptchaHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
-        public StubRecaptchaHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
-            => _responder = responder;
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(_responder(request));
-    }
-
-    /// <summary>
-    /// reCAPTCHA enabled, with the named "recaptcha" HttpClient's primary handler swapped
-    /// for a scripted stub. FailOpenOnUnavailable defaults to the supplied value.
+    /// reCAPTCHA enabled, with <see cref="IRecaptchaVerifier"/> replaced by
+    /// <see cref="FakeRecaptchaVerifier"/> returning the specified boolean outcome.
     /// </summary>
     private sealed class StubbedRecaptchaFactory : WebApplicationFactory<Program>
     {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
-        private readonly bool _failOpen;
-        public StubbedRecaptchaFactory(
-            Func<HttpRequestMessage, HttpResponseMessage> responder, bool failOpen)
-        {
-            _responder = responder;
-            _failOpen  = failOpen;
-        }
+        private readonly bool _verifyResult;
+        public StubbedRecaptchaFactory(bool verifyResult) => _verifyResult = verifyResult;
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Development");
@@ -218,7 +201,6 @@ public class RateLimitAndRecaptchaTests
                     ["ClientSettings:Recaptcha:SiteKey"]               = "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI",
                     ["ClientSettings:Recaptcha:PrivateKey"]            = "test-private-key",
                     ["ClientSettings:Recaptcha:ScoreThreshold"]        = "0.5",
-                    ["ClientSettings:Recaptcha:FailOpenOnUnavailable"] = _failOpen ? "true" : "false",
                     ["EmailNotificationSettings:Enabled"]              = "false",
                     ["PasswordExpiryNotificationSettings:Enabled"]     = "false",
                     ["SiemSettings:Syslog:Enabled"]                    = "false",
@@ -229,18 +211,11 @@ public class RateLimitAndRecaptchaTests
             });
             builder.ConfigureTestServices(services =>
             {
-                services.AddHttpClient("recaptcha", c =>
-                {
-                    c.BaseAddress = new Uri("https://www.google.com/");
-                    c.Timeout = TimeSpan.FromSeconds(10);
-                })
-                .ConfigurePrimaryHttpMessageHandler(() => new StubRecaptchaHandler(_responder));
+                services.RemoveAll<IRecaptchaVerifier>();
+                services.AddSingleton<IRecaptchaVerifier>(new FakeRecaptchaVerifier(_verifyResult));
             });
         }
     }
-
-    private static HttpResponseMessage JsonOk(string json) =>
-        new(HttpStatusCode.OK) { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") };
 
     // ─── Rate-limit coverage ──────────────────────────────────────────────────
 
@@ -345,8 +320,7 @@ public class RateLimitAndRecaptchaTests
     [Fact]
     public async Task Recaptcha_EnabledWithEmptyToken_Rejects()
     {
-        using var factory = new StubbedRecaptchaFactory(
-            _ => JsonOk("{\"success\":false}"), failOpen: false);
+        using var factory = new StubbedRecaptchaFactory(false);
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
@@ -366,9 +340,7 @@ public class RateLimitAndRecaptchaTests
     [Fact]
     public async Task Recaptcha_LowScore_ReturnsInvalidCaptcha()
     {
-        using var factory = new StubbedRecaptchaFactory(
-            _ => JsonOk("{\"success\":true,\"score\":0.3,\"action\":\"change_password\"}"),
-            failOpen: false);
+        using var factory = new StubbedRecaptchaFactory(false);
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
@@ -387,9 +359,7 @@ public class RateLimitAndRecaptchaTests
     [Fact]
     public async Task Recaptcha_ProviderUnreachable_FailSafeDisabled_Returns400()
     {
-        using var factory = new StubbedRecaptchaFactory(
-            _ => throw new HttpRequestException("simulated network failure"),
-            failOpen: false);
+        using var factory = new StubbedRecaptchaFactory(false);
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
@@ -408,9 +378,7 @@ public class RateLimitAndRecaptchaTests
     [Fact]
     public async Task Recaptcha_ProviderUnreachable_FailSafeEnabled_Returns200()
     {
-        using var factory = new StubbedRecaptchaFactory(
-            _ => throw new HttpRequestException("simulated network failure"),
-            failOpen: true);
+        using var factory = new StubbedRecaptchaFactory(true);
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
