@@ -3,26 +3,12 @@ using PassReset.Common;
 namespace PassReset.Tests.Web.Helpers;
 
 /// <summary>
-/// The Levenshtein implementation lives on <see cref="IPasswordChangeProvider.MeasureNewPasswordDistance"/>
-/// as a default interface method. This test exercises it through a tiny implementor.
+/// The Levenshtein implementation lives on <see cref="PasswordDistance.Levenshtein"/>.
 /// </summary>
 public class LevenshteinTests
 {
-    private sealed class DistanceOnlyProvider : IPasswordChangeProvider
-    {
-        public Task<ApiErrorItem?> PerformPasswordChangeAsync(string u, string c, string n) =>
-            Task.FromResult<ApiErrorItem?>(null);
-        public string? GetUserEmail(string u) => null;
-        public IEnumerable<(string Username, string Email, DateTime? PasswordLastSet)> GetUsersInGroup(string g) => [];
-        public TimeSpan GetDomainMaxPasswordAge() => TimeSpan.MaxValue;
-        public Task<PasswordPolicy?> GetEffectivePasswordPolicyAsync() =>
-            Task.FromResult<PasswordPolicy?>(null);
-        public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword) =>
-            Task.FromResult(new PasswordStatus(false, null, null, false, ExpirySource.Unknown, null));
-    }
-
     private static int Distance(string a, string b) =>
-        ((IPasswordChangeProvider)new DistanceOnlyProvider()).MeasureNewPasswordDistance(a, b);
+        PasswordDistance.Levenshtein(a, b);
 
     [Theory]
     [InlineData("", "", 0)]

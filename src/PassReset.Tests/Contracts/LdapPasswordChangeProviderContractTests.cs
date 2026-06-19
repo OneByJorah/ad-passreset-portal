@@ -10,10 +10,10 @@ using PassReset.Tests.Fakes;
 namespace PassReset.Tests.Contracts;
 
 /// <summary>
-/// Runs the shared <see cref="IPasswordChangeProviderContract"/> against
+/// Runs the shared <see cref="IPasswordChangerContract"/> against
 /// <see cref="LdapPasswordChangeProvider"/> wired to a <see cref="FakeLdapSession"/>.
 /// </summary>
-public sealed class LdapPasswordChangeProviderContractTests : IPasswordChangeProviderContract
+public sealed class LdapPasswordChangeProviderContractTests : IPasswordChangerContract
 {
     // One fake per test — xUnit creates a fresh class instance per [Fact], so _fake is
     // constructed once and reused across CreateProvider + SeedUser within the same test.
@@ -30,7 +30,7 @@ public sealed class LdapPasswordChangeProviderContractTests : IPasswordChangePro
     // the integer code directly (see LdapErrorMapping.Map switch arm `49 => ...`).
     private const int LdapInvalidCredentialsResultCode = 49;
 
-    protected override IPasswordChangeProvider CreateProvider()
+    protected override IPasswordChanger CreateProvider()
     {
         // Fallback for any search filter not explicitly seeded — mirrors a real AD
         // returning zero entries for an unknown user, instead of the fake's default
@@ -115,7 +115,7 @@ public sealed class LdapPasswordChangeProviderContractTests : IPasswordChangePro
         return new TestUser(username, currentPassword);
     }
 
-    protected override IPasswordChangeProvider SeedBannedWord(string term)
+    protected override IPasswordChanger SeedBannedWord(string term)
     {
         // Write a temp banned-words file containing the given term, then wrap the
         // inner LDAP provider with LocalPolicyPasswordChangeProvider pointed at that file.

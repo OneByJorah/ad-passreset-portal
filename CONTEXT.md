@@ -24,7 +24,23 @@ Proving a user's identity *without* their current password (e.g. email/SMS OTP, 
 _Avoid_: 2FA, MFA, second factor (those name mechanisms; "Identity-Proofing" names the capability)
 
 **Provider Mode**:
-The selector (`Auto` | `Windows` | `Ldap`) that decides which `IPasswordChangeProvider` backs a Change: the Windows `System.DirectoryServices.AccountManagement` path or the cross-platform `System.DirectoryServices.Protocols` LDAP path. `Auto` picks Windows on Windows, LDAP elsewhere.
+The selector (`Auto` | `Windows` | `Ldap`) that decides which directory adapter backs a Change: the Windows `System.DirectoryServices.AccountManagement` path or the cross-platform `System.DirectoryServices.Protocols` LDAP path. `Auto` picks Windows on Windows, LDAP elsewhere.
+
+## Provider Seams
+
+The portal's interaction with Active Directory is exposed as three distinct responsibilities, each its own seam. A single directory adapter (chosen by [[Provider Mode]]) satisfies all three; only the Change seam is decorated (lockout, local policy).
+
+**Password Changer**:
+The credentialed write path: authenticate the user and change their own password. The only seam wrapped by the lockout and Local Policy decorators.
+_Avoid_: PasswordChangeProvider (that is one adapter, not the seam)
+
+**Password Status Reader**:
+The credentialed read path serving a Status Check: authenticate and return resolved expiry plus the effective AD password policy. Read-only; never mutates.
+_Avoid_: status provider, policy provider
+
+**Directory User Reader**:
+The unauthenticated read path used by side-effects (the password-changed email and the expiry-notification background service): resolve a user's email, enumerate a group's members, read the domain maximum password age. Reads directory facts without binding as the user.
+_Avoid_: user lookup, directory query
 
 **Local Policy**:
 Offline password-validation rules applied *before* the AD round-trip: banned-word substring matching and an offline Pwned (HaveIBeenPwned) SHA-1 lookup against operator-supplied files. A validation layer, not a credential store.

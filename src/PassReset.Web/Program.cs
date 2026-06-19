@@ -395,8 +395,8 @@ try
     builder.Services.AddSingleton<PassReset.Common.LocalPolicy.BannedWordsChecker>();
     builder.Services.AddSingleton<PassReset.Common.LocalPolicy.LocalPwnedPasswordsChecker>();
 
-    // Chain: LocalPolicyPasswordChangeProvider( LockoutPasswordChangeProvider( core ) )
-    builder.Services.AddSingleton<IPasswordChangeProvider>(sp =>
+    // Change seam: LocalPolicy( Lockout( adapter ) ) — only the credentialed write path is decorated.
+    builder.Services.AddSingleton<IPasswordChanger>(sp =>
     {
         var lockout = sp.GetRequiredService<LockoutPasswordChangeProvider>();
         var banned  = sp.GetRequiredService<PassReset.Common.LocalPolicy.BannedWordsChecker>();
@@ -404,8 +404,28 @@ try
         var log     = sp.GetRequiredService<ILogger<PassReset.Common.LocalPolicy.LocalPolicyPasswordChangeProvider>>();
         return new PassReset.Common.LocalPolicy.LocalPolicyPasswordChangeProvider(lockout, banned, pwned, log);
     });
+
+    // Status + Directory seams: resolve straight to the single adapter instance, undecorated.
+    // The concrete type is branch-specific; map both seams to whichever adapter was registered above.
+    builder.Services.AddSingleton<IPasswordStatusReader>(ResolveAdapter);
+    builder.Services.AddSingleton<IDirectoryUserReader>(sp => (IDirectoryUserReader)ResolveAdapter(sp));
+
     builder.Services.AddSingleton<ILockoutDiagnostics>(sp =>
         sp.GetRequiredService<LockoutPasswordChangeProvider>());
+
+    IPasswordStatusReader ResolveAdapter(IServiceProvider sp)
+    {
+        if (webSettings.UseDebugProvider)
+            return sp.GetRequiredService<DebugPasswordChangeProvider>();
+        if (effectiveProvider == WiringTarget.Ldap)
+            return sp.GetRequiredService<LdapPasswordChangeProvider>();
+#if WINDOWS_PROVIDER
+        return sp.GetRequiredService<PasswordChangeProvider>();
+#else
+        throw new InvalidOperationException(
+            "ProviderMode resolved to Windows, but this build excludes the Windows provider.");
+#endif
+    }
 
     // ─── SIEM service ─────────────────────────────────────────────────────────────
     builder.Services.AddSingleton<ISiemService, SiemService>();

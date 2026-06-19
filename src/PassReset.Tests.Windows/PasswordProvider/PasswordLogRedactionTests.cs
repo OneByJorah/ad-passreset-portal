@@ -63,7 +63,7 @@ public sealed class PasswordLogRedactionTests
     // same "params-in, log-some-debug-events, return-known-error" shape but does not take
     // a dependency on web-project internals. Accepts the same sentinels so the test
     // proves the provider surface does not leak the passed-in passwords.
-    private sealed class FakeInvalidCredsProvider : IPasswordChangeProvider
+    private sealed class FakeInvalidCredsProvider : IPasswordChanger
     {
         private readonly ILogger<FakeInvalidCredsProvider> _logger;
         public FakeInvalidCredsProvider(ILogger<FakeInvalidCredsProvider> logger) => _logger = logger;
@@ -74,13 +74,6 @@ public sealed class PasswordLogRedactionTests
             _logger.LogInformation("fake-provider: complete for {User}", username);
             return Task.FromResult<ApiErrorItem?>(new ApiErrorItem(ApiErrorCode.InvalidCredentials));
         }
-
-        public string? GetUserEmail(string username) => null;
-        public IEnumerable<(string Username, string Email, DateTime? PasswordLastSet)> GetUsersInGroup(string groupName) => [];
-        public TimeSpan GetDomainMaxPasswordAge() => TimeSpan.FromDays(90);
-        public Task<PasswordPolicy?> GetEffectivePasswordPolicyAsync() => Task.FromResult<PasswordPolicy?>(null);
-        public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword) =>
-            Task.FromResult(new PasswordStatus(false, null, null, false, ExpirySource.Unknown, null));
     }
 
     private static void AssertNoSentinels(ListLogEventSink sink)

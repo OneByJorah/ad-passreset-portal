@@ -19,7 +19,9 @@ namespace PassReset.Web.Controllers;
 [Route("api/[controller]")]
 public sealed class PasswordController : ControllerBase
 {
-    private readonly IPasswordChangeProvider _provider;
+    private readonly IPasswordChanger _changer;
+    private readonly IPasswordStatusReader _statusReader;
+    private readonly IDirectoryUserReader _directoryReader;
     private readonly IEmailService _emailService;
     private readonly ISiemService _siemService;
     private readonly IOptions<ClientSettings> _clientSettings;
@@ -36,7 +38,9 @@ public sealed class PasswordController : ControllerBase
         new("^[a-fA-F0-9]{5}$", RegexOptions.Compiled);
 
     public PasswordController(
-        IPasswordChangeProvider provider,
+        IPasswordChanger changer,
+        IPasswordStatusReader statusReader,
+        IDirectoryUserReader directoryReader,
         IEmailService emailService,
         ISiemService siemService,
         IOptions<ClientSettings> clientSettings,
@@ -48,7 +52,9 @@ public sealed class PasswordController : ControllerBase
         IHttpClientFactory httpClientFactory,
         ILogger<PasswordController> logger)
     {
-        _provider           = provider;
+        _changer         = changer;
+        _statusReader    = statusReader;
+        _directoryReader = directoryReader;
         _emailService       = emailService;
         _siemService        = siemService;
         _clientSettings     = clientSettings;
@@ -153,7 +159,7 @@ public sealed class PasswordController : ControllerBase
         var settings = _clientSettings.Value;
 
         if (settings.MinimumDistance > 0 &&
-            _provider.MeasureNewPasswordDistance(model.CurrentPassword, model.NewPassword) < settings.MinimumDistance)
+            PasswordDistance.Levenshtein(model.CurrentPassword, model.NewPassword) < settings.MinimumDistance)
         {
             Audit("DistanceTooLow", model.Username, clientIp);
             var result = new ApiResult();
@@ -184,7 +190,7 @@ public sealed class PasswordController : ControllerBase
         });
 
         // Perform the password change
-        var error = await _provider.PerformPasswordChangeAsync(model.Username, model.CurrentPassword, model.NewPassword);
+        var error = await _changer.PerformPasswordChangeAsync(model.Username, model.CurrentPassword, model.NewPassword);
 
         if (error is not null)
         {
@@ -208,7 +214,7 @@ public sealed class PasswordController : ControllerBase
 
             _ = Task.Run(async () =>
             {
-                var emailAddress = _provider.GetUserEmail(username);
+                var emailAddress = _directoryReader.GetUserEmail(username);
                 if (string.IsNullOrWhiteSpace(emailAddress)) return;
 
                 var body = notifCfg.BodyTemplate
@@ -256,7 +262,7 @@ public sealed class PasswordController : ControllerBase
             }
         }
 
-        var status = await _provider.GetUserPasswordStatusAsync(model.Username, model.CurrentPassword);
+        var status = await _statusReader.GetUserPasswordStatusAsync(model.Username, model.CurrentPassword);
 
         if (!status.Authenticated)
         {

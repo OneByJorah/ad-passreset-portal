@@ -106,7 +106,9 @@ public class GenericErrorMappingTests : IDisposable
     private static void SwapInDebugProvider(IServiceCollection services)
     {
         var descriptors = services.Where(d =>
-            d.ServiceType == typeof(IPasswordChangeProvider) ||
+            d.ServiceType == typeof(IPasswordChanger) ||
+            d.ServiceType == typeof(IPasswordStatusReader) ||
+            d.ServiceType == typeof(IDirectoryUserReader) ||
             d.ServiceType == typeof(LockoutPasswordChangeProvider) ||
             d.ServiceType == typeof(PasswordChangeProvider) ||
             d.ServiceType == typeof(ILockoutDiagnostics) ||
@@ -119,8 +121,12 @@ public class GenericErrorMappingTests : IDisposable
                 sp.GetRequiredService<DebugPasswordChangeProvider>(),
                 sp.GetRequiredService<IOptions<PasswordChangeOptions>>(),
                 sp.GetRequiredService<ILogger<LockoutPasswordChangeProvider>>()));
-        services.AddSingleton<IPasswordChangeProvider>(sp =>
+        services.AddSingleton<IPasswordChanger>(sp =>
             sp.GetRequiredService<LockoutPasswordChangeProvider>());
+        services.AddSingleton<IPasswordStatusReader>(sp =>
+            sp.GetRequiredService<DebugPasswordChangeProvider>());
+        services.AddSingleton<IDirectoryUserReader>(sp =>
+            sp.GetRequiredService<DebugPasswordChangeProvider>());
         services.AddSingleton<ILockoutDiagnostics>(sp =>
             sp.GetRequiredService<LockoutPasswordChangeProvider>());
         services.AddSingleton<IEmailService, NoOpEmailService>();

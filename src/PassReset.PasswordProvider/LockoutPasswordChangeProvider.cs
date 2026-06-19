@@ -16,7 +16,7 @@ public interface ILockoutDiagnostics
 }
 
 /// <summary>
-/// Decorator around <see cref="IPasswordChangeProvider"/> that tracks per-username
+/// Decorator around <see cref="IPasswordChanger"/> that tracks per-username
 /// credential failure counts and blocks requests before they reach Active Directory
 /// once the portal lockout threshold is reached.
 ///
@@ -46,7 +46,7 @@ public interface ILockoutDiagnostics
 /// are used, each maintains an independent counter, effectively multiplying the lockout
 /// threshold. A periodic timer evicts expired entries to prevent unbounded memory growth.
 /// </summary>
-public sealed class LockoutPasswordChangeProvider : IPasswordChangeProvider, ILockoutDiagnostics, IDisposable
+public sealed class LockoutPasswordChangeProvider : IPasswordChanger, ILockoutDiagnostics, IDisposable
 {
     private const string CacheKeyPrefix = "portal_lockout:";
 
@@ -55,13 +55,13 @@ public sealed class LockoutPasswordChangeProvider : IPasswordChangeProvider, ILo
     private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset Expiry)> _counters
         = new(StringComparer.Ordinal);
 
-    private readonly IPasswordChangeProvider _inner;
+    private readonly IPasswordChanger _inner;
     private readonly PasswordChangeOptions _options;
     private readonly ILogger<LockoutPasswordChangeProvider> _logger;
     private readonly Timer _cleanupTimer;
 
     public LockoutPasswordChangeProvider(
-        IPasswordChangeProvider inner,
+        IPasswordChanger inner,
         IOptions<PasswordChangeOptions> options,
         ILogger<LockoutPasswordChangeProvider> logger)
     {
@@ -130,24 +130,6 @@ public sealed class LockoutPasswordChangeProvider : IPasswordChangeProvider, ILo
 
         return result;
     }
-
-    /// <inheritdoc />
-    public string? GetUserEmail(string username) => _inner.GetUserEmail(username);
-
-    /// <inheritdoc />
-    public IEnumerable<(string Username, string Email, DateTime? PasswordLastSet)>
-        GetUsersInGroup(string groupName) => _inner.GetUsersInGroup(groupName);
-
-    /// <inheritdoc />
-    public TimeSpan GetDomainMaxPasswordAge() => _inner.GetDomainMaxPasswordAge();
-
-    /// <inheritdoc />
-    public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
-        => _inner.GetUserPasswordStatusAsync(username, currentPassword);
-
-    /// <inheritdoc />
-    public Task<PasswordPolicy?> GetEffectivePasswordPolicyAsync() =>
-        _inner.GetEffectivePasswordPolicyAsync();
 
     // ─── Private helpers ──────────────────────────────────────────────────────
 

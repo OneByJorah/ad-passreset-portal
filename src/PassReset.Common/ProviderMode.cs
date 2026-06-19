@@ -1,7 +1,7 @@
 namespace PassReset.Common;
 
 /// <summary>
-/// Selects which <see cref="IPasswordChangeProvider"/> implementation PassReset uses at runtime.
+/// Selects which <see cref="IPasswordChanger"/> implementation PassReset uses at runtime.
 /// </summary>
 public enum ProviderMode
 {
