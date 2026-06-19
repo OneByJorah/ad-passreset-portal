@@ -132,10 +132,9 @@ try
         c.Timeout = TimeSpan.FromSeconds(5);
     });
 
-    // STAB-014: reCAPTCHA v3 verification client. Named client (not a static field) so
-    // tests can inject a stub handler to exercise low-score / unreachable fail-safe paths
-    // without hitting Google. PooledConnectionLifetime via the factory respects DNS changes.
-    builder.Services.AddHttpClient("recaptcha", c =>
+    // STAB-014: reCAPTCHA v3 verification client. Typed client so IRecaptchaVerifier is
+    // resolved directly from DI; PooledConnectionLifetime via the factory respects DNS changes.
+    builder.Services.AddHttpClient<IRecaptchaVerifier, GoogleRecaptchaVerifier>(c =>
     {
         c.BaseAddress = new Uri("https://www.google.com/");
         c.Timeout = TimeSpan.FromSeconds(10);
