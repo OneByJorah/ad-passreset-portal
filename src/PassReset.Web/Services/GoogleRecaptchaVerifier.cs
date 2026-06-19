@@ -30,6 +30,11 @@ public sealed class GoogleRecaptchaVerifier : IRecaptchaVerifier
     public async Task<bool> VerifyAsync(string token, string action, string clientIp)
     {
         var config = _clientSettings.Value.Recaptcha;
+        if (config is null)
+        {
+            _logger.LogWarning("reCAPTCHA verification requested but no Recaptcha config is present for IP {ClientIp}", clientIp);
+            return false;
+        }
 
         try
         {

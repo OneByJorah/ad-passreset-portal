@@ -116,4 +116,15 @@ public class GoogleRecaptchaVerifierTests
         var v = Build(handler, failOpen: false);
         Assert.False(await v.VerifyAsync("tok", "change_password", "1.2.3.4"));
     }
+
+    [Fact]
+    public async Task NullConfig_ReturnsFalse()
+    {
+        // Verifier with no Recaptcha config at all — should fail closed, never throw.
+        var handler = new FakeHttpMessageHandler(_ => throw new InvalidOperationException("should not be called"));
+        var http = new HttpClient(handler) { BaseAddress = new Uri("https://www.google.com/") };
+        var settings = Options.Create(new ClientSettings()); // Recaptcha left null
+        var verifier = new GoogleRecaptchaVerifier(http, settings, NullLogger<GoogleRecaptchaVerifier>.Instance);
+        Assert.False(await verifier.VerifyAsync("tok", "change_password", "1.2.3.4"));
+    }
 }
