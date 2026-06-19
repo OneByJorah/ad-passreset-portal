@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -14,15 +14,16 @@ import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import { changePassword } from '../api/client';
 import { usePolicy } from '../hooks/usePolicy';
 import { useRecaptcha } from '../hooks/useRecaptcha';
-import type { ClientSettings, ApiErrorItem } from '../types/settings';
+import type { ClientSettings, FormErrors } from '../types/settings';
 import { ApiErrorCode } from '../types/settings';
-import { levenshtein } from '../utils/levenshtein';
 import { generatePassword } from '../utils/passwordGenerator';
-import { scheduleClipboardClear, type ClipboardClearHandle } from '../utils/clipboardClear';
+import { validatePasswordForm } from '../utils/validatePasswordForm';
+import { mapApiErrors } from '../utils/mapApiErrors';
 import AdPasswordPolicyPanel from './AdPasswordPolicyPanel';
 import ClipboardCountdown from './ClipboardCountdown';
 import HibpIndicator from './HibpIndicator';
 import { useHibpCheck } from '../hooks/useHibpCheck';
+import { useClipboardGeneration } from '../hooks/useClipboardGeneration';
 import { PasswordStrengthMeter } from './PasswordStrengthMeter';
 
 interface Props {
@@ -30,41 +31,6 @@ interface Props {
   onSuccess: () => void;
   /** Pre-fills the username (e.g. carried over from the Status view). Defaults to empty. */
   initialUsername?: string;
-}
-
-interface FormErrors {
-  username?: string;
-  currentPassword?: string;
-  newPassword?: string;
-  newPasswordVerify?: string;
-  general?: string;
-}
-
-function errorMessage(code: number, alerts: ClientSettings['alerts']): string {
-  const a = alerts ?? {};
-  switch (code) {
-    case ApiErrorCode.FieldRequired:       return a.errorFieldRequired        ?? 'This field is required.';
-    case ApiErrorCode.FieldMismatch:       return a.errorFieldMismatch        ?? 'Passwords do not match.';
-    case ApiErrorCode.UserNotFound:        return a.errorInvalidUser          ?? 'User account not found.';
-    case ApiErrorCode.InvalidCredentials:  return a.errorInvalidCredentials   ?? 'Current password is incorrect.';
-    case ApiErrorCode.InvalidCaptcha:      return a.errorCaptcha              ?? 'Could not verify you are not a robot.';
-    case ApiErrorCode.ChangeNotPermitted:  return a.errorPasswordChangeNotAllowed ?? 'Password change not allowed.';
-    case ApiErrorCode.InvalidDomain:       return a.errorInvalidDomain        ?? 'Invalid domain.';
-    case ApiErrorCode.LdapProblem:         return a.errorConnectionLdap       ?? 'Directory connection error.';
-    case ApiErrorCode.ComplexPassword:     return a.errorComplexPassword      ?? 'Password does not meet complexity requirements.';
-    case ApiErrorCode.MinimumScore:        return a.errorScorePassword        ?? 'Password is not strong enough.';
-    case ApiErrorCode.MinimumDistance:     return a.errorDistancePassword     ?? 'New password is too similar to the current password.';
-    case ApiErrorCode.PwnedPassword:       return a.errorPwnedPassword        ?? 'This password is publicly known. Please choose another.';
-    case ApiErrorCode.PasswordTooYoung:    return a.errorPasswordTooYoung     ?? 'Password was changed too recently.';
-    case ApiErrorCode.AccountDisabled:     return 'Your account is disabled. Contact IT Support.';
-    case ApiErrorCode.RateLimitExceeded:        return a.errorRateLimitExceeded         ?? 'Too many attempts. Please wait and try again.';
-    case ApiErrorCode.PwnedPasswordCheckFailed: return a.errorPwnedPasswordCheckFailed ?? 'Could not verify password safety. Please try again.';
-    case ApiErrorCode.PortalLockout:            return a.errorPortalLockout            ?? 'Too many failed attempts. Please wait before trying again.';
-    // ApproachingLockout uses the configured warning string as both the general error and warning banner.
-    case ApiErrorCode.ApproachingLockout:       return a.errorApproachingLockout       ?? 'Incorrect password. One more failed attempt will temporarily lock your portal access.';
-    case ApiErrorCode.PasswordTooRecentlyChanged: return a.errorPasswordTooRecentlyChanged ?? 'Your password was changed too recently. Please wait before trying again.';
-    default:                                    return 'An unexpected error occurred. Please contact IT Support.';
-  }
 }
 
 export function PasswordForm({ settings, onSuccess, initialUsername = '' }: Props) {
@@ -107,22 +73,13 @@ export function PasswordForm({ settings, onSuccess, initialUsername = '' }: Prop
   const [submitting, setSubmitting]             = useState(false);
   const [approachingLockout, setApproachingLockout] = useState(false);
 
-  // FEAT-003: clipboard auto-clear lifecycle.
-  const [clipboardRemaining, setClipboardRemaining] = useState<number>(0);
-  const [clipboardState, setClipboardState]
-    = useState<'idle' | 'counting' | 'cleared' | 'cancelled'>('idle');
-  const clipboardHandleRef = useRef<ClipboardClearHandle | null>(null);
-  const clearedResetTimerRef = useRef<number | null>(null);
-
-  // Cancel any pending clipboard timer when the form unmounts.
-  useEffect(() => {
-    return () => {
-      clipboardHandleRef.current?.cancel();
-      if (clearedResetTimerRef.current !== null) {
-        window.clearTimeout(clearedResetTimerRef.current);
-      }
-    };
-  }, []);
+  // FEAT-003: clipboard auto-clear lifecycle, owned by the hook.
+  const {
+    remaining: clipboardRemaining,
+    state: clipboardState,
+    copyAndSchedule,
+    cancel: cancelClipboard,
+  } = useClipboardGeneration(settings.clipboardClearSeconds ?? 30);
 
   const { executeRecaptcha } = useRecaptcha(
     settings.recaptcha?.enabled ? settings.recaptcha.siteKey : undefined
@@ -137,44 +94,27 @@ export function PasswordForm({ settings, onSuccess, initialUsername = '' }: Prop
   // in which case the warning Alert is rendered.
   const hibpFailOpen = settings.failOpenOnPwnedCheckUnavailable !== false;
 
+  // Assemble the Form Validation inputs from settings + the compiled regexes.
+  // Regex compilation (with bad-pattern guarding) stays in this component; the
+  // validator receives already-compiled RegExp objects and stays pure.
   function validate(): FormErrors {
-    const errs: FormErrors = {};
-    const required = errors_.fieldRequired ?? 'This field is required.';
-
-    if (!username.trim())       { errs.username        = required; }
-    if (!currentPassword)       { errs.currentPassword = required; }
-    if (!newPassword)           { errs.newPassword     = required; }
-    if (!newPasswordVerify)     { errs.newPasswordVerify = required; }
-
-    if (username && attrs && attrs.length > 0) {
-      // Apply email regex only when every configured attribute requires an email-format input.
-      const allRequireEmail = attrs.every(a => a === 'userprincipalname' || a === 'mail');
-      if (allRequireEmail && emailRx) {
-        if (!emailRx.test(username))
-          errs.username = errors_.usernameEmailPattern ?? 'Please enter a valid email address.';
-      }
-      // samaccountname (or any combo including it): no regex — bare name and email-format both accepted
-    } else if (username && settings.useEmail && emailRx) {
-      if (!emailRx.test(username))
-        errs.username = errors_.usernameEmailPattern ?? 'Please enter a valid email address.';
-    } else if (username && usernameRx) {
-      if (!usernameRx.test(username))
-        errs.username = errors_.usernamePattern ?? 'Please enter a valid username.';
-    }
-
-    if (newPassword && newPasswordVerify && newPassword !== newPasswordVerify)
-      errs.newPasswordVerify = errors_.passwordMatch ?? 'Passwords do not match.';
-
-    // minimumScore client-side check is intentionally skipped here;
-    // the strength meter gives visual feedback and the backend enforces nothing
-    // (score is UI-only). Server-side we only enforce minimumDistance.
-
-    if (newPassword && currentPassword && settings.minimumDistance > 0) {
-      if (levenshtein(currentPassword, newPassword) < settings.minimumDistance)
-        errs.newPassword = settings.alerts?.errorDistancePassword ?? 'New password is too similar to your current password.';
-    }
-
-    return errs;
+    return validatePasswordForm(
+      { username, currentPassword, newPassword, newPasswordVerify },
+      {
+        attrs,
+        emailRx,
+        usernameRx,
+        useEmail: settings.useEmail,
+        minimumDistance: settings.minimumDistance,
+        messages: {
+          fieldRequired: errors_.fieldRequired,
+          usernameEmailPattern: errors_.usernameEmailPattern,
+          usernamePattern: errors_.usernamePattern,
+          passwordMatch: errors_.passwordMatch,
+          distancePassword: settings.alerts?.errorDistancePassword,
+        },
+      },
+    );
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -186,9 +126,7 @@ export function PasswordForm({ settings, onSuccess, initialUsername = '' }: Prop
     setSubmitting(true);
     setApproachingLockout(false);
     // Cancel any pending clipboard-clear timer — form submission supersedes it.
-    clipboardHandleRef.current?.cancel();
-    clipboardHandleRef.current = null;
-    setClipboardState('idle');
+    cancelClipboard();
     try {
       const recaptchaToken = settings.recaptcha?.enabled && settings.recaptcha?.siteKey
         ? await executeRecaptcha()
@@ -207,19 +145,12 @@ export function PasswordForm({ settings, onSuccess, initialUsername = '' }: Prop
         return;
       }
 
-      const newErrs: FormErrors = {};
-      result.errors.forEach((err: ApiErrorItem) => {
-        if (err.errorCode === ApiErrorCode.ApproachingLockout) {
-          setApproachingLockout(true);
-        }
-        const msg = errorMessage(err.errorCode, settings.alerts);
-        if (err.fieldName === 'Username')               newErrs.username        = msg;
-        else if (err.fieldName === 'CurrentPassword')   newErrs.currentPassword = msg;
-        else if (err.fieldName === 'NewPassword')       newErrs.newPassword     = msg;
-        else if (err.fieldName === 'NewPasswordVerify') newErrs.newPasswordVerify = msg;
-        else                                            newErrs.general         = msg;
-      });
-      setFormErrors(newErrs);
+      // The approaching-lockout banner is derived from the same error list;
+      // mapApiErrors itself stays a pure mapping with no side effects.
+      if (result.errors.some(err => err.errorCode === ApiErrorCode.ApproachingLockout)) {
+        setApproachingLockout(true);
+      }
+      setFormErrors(mapApiErrors(result.errors, settings.alerts));
     } catch {
       setFormErrors({ general: 'An unexpected error occurred. Please try again.' });
     } finally {
@@ -234,53 +165,9 @@ export function PasswordForm({ settings, onSuccess, initialUsername = '' }: Prop
     setShowNew(true);
     setShowVerify(true);
 
-    // FEAT-003: copy to clipboard and schedule auto-clear.
-    // Cancel any prior timer first (regenerate case) so the old countdown
-    // does not race the new password's clear timer.
-    clipboardHandleRef.current?.cancel();
-    clipboardHandleRef.current = null;
-    if (clearedResetTimerRef.current !== null) {
-      window.clearTimeout(clearedResetTimerRef.current);
-      clearedResetTimerRef.current = null;
-    }
-
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(pwd);
-      } else {
-        // Clipboard API unavailable — skip scheduling entirely.
-        setClipboardState('idle');
-        return;
-      }
-    } catch {
-      // Write failed (permission denied, insecure context) — do not schedule.
-      setClipboardState('idle');
-      return;
-    }
-
-    const secs = settings.clipboardClearSeconds ?? 30;
-    if (secs > 0) {
-      setClipboardState('counting');
-      setClipboardRemaining(secs);
-      clipboardHandleRef.current = scheduleClipboardClear(
-        pwd,
-        secs,
-        (r) => setClipboardRemaining(r),
-        () => {
-          setClipboardState('cleared');
-          if (clearedResetTimerRef.current !== null) {
-            window.clearTimeout(clearedResetTimerRef.current);
-          }
-          clearedResetTimerRef.current = window.setTimeout(() => {
-            setClipboardState('idle');
-            clearedResetTimerRef.current = null;
-          }, 2000);
-        },
-        () => setClipboardState('cancelled'),
-      );
-    } else {
-      setClipboardState('idle');
-    }
+    // FEAT-003: hand the generated password to the clipboard hook, which copies it
+    // and schedules the auto-clear countdown (cancelling any prior pending clear).
+    await copyAndSchedule(pwd);
   }
 
   const visibilityAdornment = (show: boolean, toggle: () => void) => (

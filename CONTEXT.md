@@ -29,3 +29,15 @@ The selector (`Auto` | `Windows` | `Ldap`) that decides which `IPasswordChangePr
 **Local Policy**:
 Offline password-validation rules applied *before* the AD round-trip: banned-word substring matching and an offline Pwned (HaveIBeenPwned) SHA-1 lookup against operator-supplied files. A validation layer, not a credential store.
 _Avoid_: Local password database, local DB (the implementation stores no credentials despite the historical phase name "local-password-db")
+
+**Form Validation** (frontend):
+The pure, synchronous client-side check that runs before a Change is submitted: required fields, username format (per [[Provider Mode]]'s allowed attributes), new-password match, and minimum Levenshtein distance from the current password. Lives beside the component, not inside it: a pure function taking the four field values plus a flat settings subset (compiled regexes, allowed attributes, `useEmail`, `minimumDistance`, message strings) and returning field-keyed errors. Regex *compilation* (with bad-pattern-disables-the-check guarding) stays in the component; the validator receives already-compiled `RegExp` objects.
+_Avoid_: form validator (names the function, not the concept), client validation
+
+**Server-Error Mapping** (frontend):
+The pure translation of an AD/server `ApiResult.errors` list into the same field-keyed errors shape that [[Form Validation]] produces. Buckets each error by its `fieldName` and renders its message via the existing per-code `errorMessage` switch. Purely a mapping: the *side effects* it currently triggers inline — notably setting the approaching-lockout banner flag — stay in the component, which derives them from the same error list (e.g. `errors.some(e => e.code === ApproachingLockout)`).
+_Avoid_: error handler (it handles nothing; it maps)
+
+**Clipboard Generation** (frontend):
+The lifecycle around a generated password being copied to the clipboard and auto-cleared after a countdown. Owned by a dedicated hook that holds the countdown remaining, the lifecycle state (`idle | counting | cleared | cancelled`), the schedule handle, and the unmount cleanup — exposing `copyAndSchedule(pwd)` and `cancel()`. Its boundary is the *clipboard*, not password generation: choosing/filling the new password and toggling field visibility remain the component's job (it calls `copyAndSchedule` after filling the fields). Submitting a Change supersedes a pending clear, so the component calls `cancel()` on submit.
+_Avoid_: generate hook, useGenerate (names a wider flow than the hook owns)
