@@ -63,7 +63,7 @@ public class RateLimitAndRecaptchaTests
     {
         using var factory = new RateLimitFactory();
         using var scope = factory.Services.CreateScope();
-        var verifier = scope.ServiceProvider.GetService<IRecaptchaVerifier>();
+        var verifier = scope.ServiceProvider.GetRequiredService<IRecaptchaVerifier>();
         Assert.NotNull(verifier);
         Assert.IsType<GoogleRecaptchaVerifier>(verifier);
     }
@@ -376,7 +376,7 @@ public class RateLimitAndRecaptchaTests
     }
 
     [Fact]
-    public async Task Recaptcha_ProviderUnreachable_FailSafeEnabled_Returns200()
+    public async Task Recaptcha_VerifierAllows_Returns200()
     {
         using var factory = new StubbedRecaptchaFactory(true);
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions

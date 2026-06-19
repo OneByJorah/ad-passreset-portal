@@ -127,4 +127,24 @@ public class GoogleRecaptchaVerifierTests
         var verifier = new GoogleRecaptchaVerifier(http, settings, NullLogger<GoogleRecaptchaVerifier>.Instance);
         Assert.False(await verifier.VerifyAsync("tok", "change_password", "1.2.3.4"));
     }
+
+    [Fact]
+    public async Task EmptyPrivateKey_ReturnsFalse()
+    {
+        // Recaptcha config present but PrivateKey is empty — must fail closed before any HTTP call.
+        var handler = new FakeHttpMessageHandler(_ => throw new InvalidOperationException("should not be called"));
+        var http = new HttpClient(handler) { BaseAddress = new Uri("https://www.google.com/") };
+        var settings = Options.Create(new ClientSettings
+        {
+            Recaptcha = new Recaptcha
+            {
+                Enabled = true,
+                PrivateKey = "", // empty — guard must short-circuit
+                ScoreThreshold = 0.5f,
+                FailOpenOnUnavailable = false,
+            },
+        });
+        var verifier = new GoogleRecaptchaVerifier(http, settings, NullLogger<GoogleRecaptchaVerifier>.Instance);
+        Assert.False(await verifier.VerifyAsync("tok", "change_password", "1.2.3.4"));
+    }
 }

@@ -36,11 +36,17 @@ public sealed class GoogleRecaptchaVerifier : IRecaptchaVerifier
             return false;
         }
 
+        if (string.IsNullOrWhiteSpace(config.PrivateKey))
+        {
+            _logger.LogWarning("reCAPTCHA verification requested but no PrivateKey is configured for IP {ClientIp}", clientIp);
+            return false;
+        }
+
         try
         {
             using var content = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["secret"]   = config.PrivateKey!,
+                ["secret"]   = config.PrivateKey,
                 ["response"] = token,
                 ["remoteip"] = clientIp,
             });
