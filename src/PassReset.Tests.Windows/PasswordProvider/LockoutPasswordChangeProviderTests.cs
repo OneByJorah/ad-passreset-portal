@@ -145,7 +145,7 @@ public class LockoutPasswordChangeProviderTests
     /// <summary>
     /// Accepts "correct" as the current password; everything else returns InvalidCredentials.
     /// </summary>
-    private sealed class StubInner : IPasswordChangeProvider
+    private sealed class StubInner : IPasswordChanger
     {
         public int CallCount;
 
@@ -157,13 +157,5 @@ public class LockoutPasswordChangeProviderTests
                 : new ApiErrorItem(ApiErrorCode.InvalidCredentials);
             return Task.FromResult(result);
         }
-
-        public string? GetUserEmail(string username) => null;
-        public IEnumerable<(string Username, string Email, DateTime? PasswordLastSet)> GetUsersInGroup(string groupName) => [];
-        public TimeSpan GetDomainMaxPasswordAge() => TimeSpan.MaxValue;
-        public Task<PasswordPolicy?> GetEffectivePasswordPolicyAsync() =>
-            Task.FromResult<PasswordPolicy?>(null);
-        public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword) =>
-            Task.FromResult(new PasswordStatus(false, null, null, false, ExpirySource.Unknown, null));
     }
 }

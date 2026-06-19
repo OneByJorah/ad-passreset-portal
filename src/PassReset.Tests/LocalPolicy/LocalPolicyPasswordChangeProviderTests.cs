@@ -10,7 +10,7 @@ namespace PassReset.Tests.LocalPolicy;
 public sealed class LocalPolicyPasswordChangeProviderTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly IPasswordChangeProvider _inner = Substitute.For<IPasswordChangeProvider>();
+    private readonly IPasswordChanger _inner = Substitute.For<IPasswordChanger>();
 
     public LocalPolicyPasswordChangeProviderTests()
     {

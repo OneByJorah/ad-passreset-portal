@@ -9,7 +9,7 @@ namespace PassReset.PasswordProvider.Ldap;
 /// Cross-platform <see cref="IPasswordChanger"/> backed by
 /// <see cref="System.DirectoryServices.Protocols.LdapConnection"/>. Runs on Windows, Linux, and macOS.
 /// Behavioral parity with the Windows provider is enforced by the shared
-/// <c>IPasswordChangeProviderContract</c> test suite.
+/// <c>IPasswordChangerContract</c> test suite.
 /// </summary>
 public sealed class LdapPasswordChangeProvider : IPasswordChanger, IPasswordStatusReader, IDirectoryUserReader
 {
