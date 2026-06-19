@@ -335,9 +335,55 @@ public sealed class PasswordChangeProvider : IPasswordChangeProvider
         }
     }
 
+    internal static (DateTimeOffset? Expires, bool NeverExpires) DecodeExpiry(long raw)
+    {
+        if (raw == 0 || raw == long.MaxValue) return (null, true);
+        try { return (DateTimeOffset.FromFileTime(raw), false); }
+        catch (ArgumentOutOfRangeException) { return (null, false); }
+    }
+
     /// <inheritdoc />
-    public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
-        => throw new NotImplementedException(); // implemented in Task 3 (Windows)
+    public async Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
+    {
+        using var ctx = AcquirePrincipalContext();
+
+        var user = FindUser(ctx, username);
+        if (user is null)
+            return new PasswordStatus(false, ApiErrorCode.UserNotFound, null, false, ExpirySource.Unknown, null);
+
+        var upn = user.UserPrincipalName ?? username;
+        if (!ValidateUserCredentials(upn, currentPassword, ctx))
+            return new PasswordStatus(false, ApiErrorCode.InvalidCredentials, null, false, ExpirySource.Unknown, null);
+
+        DateTimeOffset? expires = null;
+        var never  = false;
+        var source = ExpirySource.DomainDefault;
+        try
+        {
+            var entry = (DirectoryEntry)user.GetUnderlyingObject();
+            entry.RefreshCache(new[] { "msDS-UserPasswordExpiryTimeComputed" });
+            var val = entry.Properties["msDS-UserPasswordExpiryTimeComputed"].Value;
+            if (val is not null)
+            {
+                var raw = Convert.ToInt64(val, System.Globalization.CultureInfo.InvariantCulture);
+                (expires, never) = DecodeExpiry(raw);
+                source = ExpirySource.Resolved;
+            }
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or System.DirectoryServices.DirectoryServicesCOMException)
+        {
+            _logger.LogWarning(ex, "GetUserPasswordStatusAsync: per-user expiry read failed; degrading to domain default");
+            source = ExpirySource.DomainDefault;
+        }
+
+        if (source == ExpirySource.DomainDefault && !never && expires is null)
+        {
+            if (GetDomainMaxPasswordAge() == TimeSpan.MaxValue) never = true;
+        }
+
+        var policy = await GetEffectivePasswordPolicyAsync();
+        return new PasswordStatus(true, null, expires, never, source, policy);
+    }
 
     // ─── Private helpers ──────────────────────────────────────────────────────
 
