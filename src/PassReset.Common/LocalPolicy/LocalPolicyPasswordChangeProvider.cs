@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 namespace PassReset.Common.LocalPolicy;
 
 /// <summary>
-/// Decorator around <see cref="IPasswordChangeProvider"/> that enforces operator-managed
+/// Decorator around <see cref="IPasswordChanger"/> that enforces operator-managed
 /// local password policy: banned-words substring match and offline HIBP SHA-1 lookup.
 /// Both checks run before any AD round-trip. Rejections never log the banned term or
 /// attempted password.

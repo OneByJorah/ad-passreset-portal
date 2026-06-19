@@ -16,7 +16,7 @@ public interface ILockoutDiagnostics
 }
 
 /// <summary>
-/// Decorator around <see cref="IPasswordChangeProvider"/> that tracks per-username
+/// Decorator around <see cref="IPasswordChanger"/> that tracks per-username
 /// credential failure counts and blocks requests before they reach Active Directory
 /// once the portal lockout threshold is reached.
 ///

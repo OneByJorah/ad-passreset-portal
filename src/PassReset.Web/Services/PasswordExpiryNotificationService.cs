@@ -83,7 +83,7 @@ internal sealed class PasswordExpiryNotificationService : BackgroundService, IEx
             // Resolve scoped/singleton services via a scope so this background service
             // doesn't hold onto long-lived AD connections.
             using var scope    = _services.CreateScope();
-            var provider       = scope.ServiceProvider.GetRequiredService<IPasswordChangeProvider>();
+            var provider       = scope.ServiceProvider.GetRequiredService<IDirectoryUserReader>();
             var emailService   = scope.ServiceProvider.GetRequiredService<IEmailService>();
             var passwordOptions = scope.ServiceProvider
                 .GetRequiredService<IOptions<PasswordChangeOptions>>().Value;
@@ -173,11 +173,11 @@ internal sealed class PasswordExpiryNotificationService : BackgroundService, IEx
 
     /// <summary>
     /// Queries group membership with semaphore-throttled concurrency.
-    /// Wraps the synchronous <see cref="IPasswordChangeProvider.GetUsersInGroup"/>
+    /// Wraps the synchronous <see cref="IDirectoryUserReader.GetUsersInGroup"/>
     /// in Task.Run to avoid blocking the hosted service thread pool.
     /// </summary>
     private async Task<IReadOnlyList<(string Username, string Email, DateTime? PasswordLastSet)>>
-        GetGroupUsersThrottledAsync(IPasswordChangeProvider provider, string groupName, CancellationToken ct)
+        GetGroupUsersThrottledAsync(IDirectoryUserReader provider, string groupName, CancellationToken ct)
     {
         await _groupQueryThrottle.WaitAsync(ct);
         try

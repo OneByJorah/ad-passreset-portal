@@ -6,7 +6,7 @@ using PassReset.Common;
 namespace PassReset.PasswordProvider.Ldap;
 
 /// <summary>
-/// Cross-platform <see cref="IPasswordChangeProvider"/> backed by
+/// Cross-platform <see cref="IPasswordChanger"/> backed by
 /// <see cref="System.DirectoryServices.Protocols.LdapConnection"/>. Runs on Windows, Linux, and macOS.
 /// Behavioral parity with the Windows provider is enforced by the shared
 /// <c>IPasswordChangeProviderContract</c> test suite.
@@ -455,7 +455,7 @@ public sealed class LdapPasswordChangeProvider : IPasswordChanger, IPasswordStat
     /// Resolves the email address for <paramref name="username"/> by searching each configured
     /// AllowedUsernameAttributes filter in order and returning the first non-empty <c>mail</c>
     /// value. Returns <c>null</c> if the user is not found, has no mail attribute, or any LDAP
-    /// operation fails (matches the contract in <see cref="IPasswordChangeProvider.GetUserEmail"/>:
+    /// operation fails (matches the contract in <see cref="IDirectoryUserReader.GetUserEmail"/>:
     /// implementations must not throw).
     /// </summary>
     public string? GetUserEmail(string username)
