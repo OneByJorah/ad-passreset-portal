@@ -33,6 +33,14 @@ public interface IPasswordChangeProvider
     TimeSpan GetDomainMaxPasswordAge();
 
     /// <summary>
+    /// Status Check (v2.1): authenticates the user with their current password and, on success,
+    /// returns their resolved password expiry plus the effective AD policy. Reuses the same bind
+    /// as a Password Change. Never throws — bind failures are returned via
+    /// <see cref="PasswordStatus.Error"/> with the precise code; the controller redacts for the wire.
+    /// </summary>
+    Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword);
+
+    /// <summary>
     /// Returns the effective default-domain password policy from RootDSE,
     /// or null if the AD query fails. Implementations must not throw.
     /// </summary>

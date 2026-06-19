@@ -21,6 +21,7 @@ AD-Passreset-Portal is a self‑service Active Directory password change portal 
 
 | Feature | What it does |
 |---|---|
+| Status Check | Users authenticate to see their password expiry and the live AD policy before deciding to change (the portal's landing screen) |
 | Self-service password change | Users change their own AD password from any browser |
 | Password strength meter | Live feedback while you type, powered by zxcvbn |
 | Password generator | Creates a strong password for you on demand |

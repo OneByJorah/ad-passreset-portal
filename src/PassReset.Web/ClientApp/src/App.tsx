@@ -15,6 +15,7 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import BrandHeader from './components/BrandHeader';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { PasswordForm } from './components/PasswordForm';
+import { StatusView } from './components/StatusView';
 import { useSettings } from './hooks/useSettings';
 
 function buildTheme(prefersDark: boolean) {
@@ -70,7 +71,11 @@ export default function App() {
   const theme = useMemo(() => buildTheme(prefersDark), [prefersDark]);
 
   const { settings, loading, error } = useSettings();
-  const [succeeded, setSucceeded]    = useState(false);
+
+  // Status-first landing (ADR-0001): the Status view is the landing screen; the
+  // Password Change form is a sub-step reached from a successful status check.
+  const [view, setView]         = useState<'status' | 'change' | 'success'>('status');
+  const [username, setUsername] = useState('');
 
   // Update page title once settings are loaded
   useEffect(() => {
@@ -152,7 +157,7 @@ export default function App() {
               )}
 
               {/* Success state */}
-              {!loading && !error && succeeded && (
+              {!loading && !error && view === 'success' && (
                 <Box>
                   <Alert severity="success" sx={{ mb: 2 }}>
                     <Typography fontWeight={600}>
@@ -166,7 +171,7 @@ export default function App() {
                   </Alert>
                   <Button
                     variant="outlined"
-                    onClick={() => setSucceeded(false)}
+                    onClick={() => setView('status')}
                     fullWidth
                   >
                     Change another password
@@ -174,9 +179,21 @@ export default function App() {
                 </Box>
               )}
 
-              {/* Form */}
-              {!loading && !error && !succeeded && settings && (
-                <PasswordForm settings={settings} onSuccess={() => setSucceeded(true)} />
+              {/* Status view — the landing screen (ADR-0001) */}
+              {!loading && !error && view === 'status' && settings && (
+                <StatusView
+                  settings={settings}
+                  onChangePassword={(u) => { setUsername(u); setView('change'); }}
+                />
+              )}
+
+              {/* Password Change — reached as an action from the Status view */}
+              {!loading && !error && view === 'change' && settings && (
+                <PasswordForm
+                  settings={settings}
+                  onSuccess={() => setView('success')}
+                  initialUsername={username}
+                />
               )}
 
             </CardContent>

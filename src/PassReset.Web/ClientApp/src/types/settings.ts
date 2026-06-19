@@ -122,6 +122,21 @@ export interface ApiResult {
   payload?: unknown;
 }
 
+// V2.1 — Status Check
+export interface StatusCheckRequest {
+  username: string;
+  currentPassword: string;
+  recaptcha: string;
+}
+
+export interface StatusResponse {
+  authenticated: boolean;
+  expiresUtc: string | null;
+  neverExpires: boolean;
+  source: 'Resolved' | 'DomainDefault' | 'Unknown';
+  policy: PolicyResponse | null;
+}
+
 export const ApiErrorCode = {
   Generic: 0,
   FieldRequired: 1,

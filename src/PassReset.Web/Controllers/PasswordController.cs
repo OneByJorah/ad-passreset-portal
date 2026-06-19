@@ -223,6 +223,60 @@ public sealed class PasswordController : ControllerBase
         return Ok(new ApiResult("Password changed successfully."));
     }
 
+    /// <summary>
+    /// Status Check (v2.1): authenticate with the current password and return resolved
+    /// expiry + live policy WITHOUT changing anything. Enumeration-safe: failures route
+    /// through the same STAB-013 redaction as the change flow. Same reCAPTCHA gate.
+    /// POST /api/password/status
+    /// </summary>
+    [HttpPost("status")]
+    [EnableRateLimiting("status-fixed-window")]
+    [RequestSizeLimit(4096)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public async Task<IActionResult> StatusAsync([FromBody] StatusCheckModel model)
+    {
+        var clientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        if (!ModelState.IsValid)
+        {
+            Audit("StatusValidationFailed", model.Username, clientIp, SiemEventType.ValidationFailed);
+            return BadRequest(ApiResult.FromModelStateErrors(ModelState));
+        }
+
+        var settings = _clientSettings.Value;
+        var recaptchaConfig = settings.Recaptcha;
+        if (recaptchaConfig?.Enabled == true && !string.IsNullOrWhiteSpace(recaptchaConfig.PrivateKey))
+        {
+            if (!await ValidateRecaptchaAsync(model.Recaptcha, recaptchaConfig, clientIp))
+            {
+                Audit("StatusRecaptchaFailed", model.Username, clientIp, SiemEventType.RecaptchaFailed);
+                return BadRequest(ApiResult.InvalidCaptcha());
+            }
+        }
+
+        var status = await _provider.GetUserPasswordStatusAsync(model.Username, model.CurrentPassword);
+
+        if (!status.Authenticated)
+        {
+            var code = status.Error ?? ApiErrorCode.InvalidCredentials;
+            Audit($"StatusFailed:{code}", model.Username, clientIp, MapErrorCodeToSiemEvent(code));
+            var result = new ApiResult();
+            result.Errors.Add(RedactIfProduction(new ApiErrorItem(code)));  // STAB-013 collapse
+            return BadRequest(result);
+        }
+
+        Audit("StatusChecked", model.Username, clientIp, SiemEventType.StatusChecked);
+
+        return Ok(new StatusResponse(
+            Authenticated: true,
+            ExpiresUtc:    status.ExpiresUtc?.UtcDateTime.ToString("o"),
+            NeverExpires:  status.NeverExpires,
+            Source:        status.Source.ToString(),
+            Policy:        status.Policy));
+    }
+
     // ─── Private helpers ──────────────────────────────────────────────────────
 
     private void Audit(string outcome, string username, string clientIp,

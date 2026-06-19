@@ -58,6 +58,9 @@ public sealed class LocalPolicyPasswordChangeProvider : IPasswordChangeProvider
 
     public TimeSpan GetDomainMaxPasswordAge() => _inner.GetDomainMaxPasswordAge();
 
+    public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
+        => _inner.GetUserPasswordStatusAsync(username, currentPassword);
+
     public Task<PasswordPolicy?> GetEffectivePasswordPolicyAsync() =>
         _inner.GetEffectivePasswordPolicyAsync();
 

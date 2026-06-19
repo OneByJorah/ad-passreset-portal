@@ -586,6 +586,22 @@ When the built-in password generator writes a generated password to the clipboar
 
 ---
 
+## Status Check (v2.1)
+
+The **Status Check** endpoint allows users to authenticate with their current password and view their password expiry date plus the effective AD password policy before deciding to change their password. The status-first landing screen gives users visibility into their account state without requiring a full password change.
+
+| Aspect | Detail |
+|--------|--------|
+| Endpoint | `POST /api/password/status` |
+| Authentication | User's current password via an authenticating LDAP(S) bind (Windows: `ValidateCredentials`; LDAP: per-user bind). No new privilege required — uses the same credential path as a password change. |
+| Expiry resolution | Per-user: reads the constructed attribute `msDS-UserPasswordExpiryTimeComputed` (a Windows FILETIME). On default AD, any user can read this attribute for their own object when bound as themselves. On a restrictive ACL or a PSO (Password Settings Object) assigned to the user, the attribute may be unreadable. |
+| Expiry degradation | When `msDS-UserPasswordExpiryTimeComputed` is unreadable: the UI falls back to the domain-default `maxPwdAge` and displays a caveat ("based on the domain default policy — your account may have a specific policy"). Never displays a blank or incorrect expiry as fact. |
+| Rate limiting | `status-fixed-window` policy: 5 requests per 5 minutes per IP address. **Separate partition from the change endpoint** — status checks do not consume the password-change rate-limit budget. |
+| reCAPTCHA | Reuses the existing `ClientSettings.Recaptcha` gate if enabled. |
+| SIEM audit | Emits `StatusChecked` event on success, or the applicable auth-failure code (`InvalidCredentials`, `UserNotFound`, etc.) on failure. Failures are redacted to `Generic` on the wire (STAB-013 enumeration safety). |
+
+---
+
 ## SiemSettings
 
 Forwards security events to a SIEM via RFC 5424 syslog and/or email alerts. Both channels are opt-in; all keys are optional.

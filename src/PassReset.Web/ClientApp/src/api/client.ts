@@ -4,6 +4,8 @@ import type {
   ClientSettings,
   PolicyResponse,
   PwnedCheckResponse,
+  StatusCheckRequest,
+  StatusResponse,
 } from '../types/settings';
 
 export async function fetchSettings(): Promise<ClientSettings> {
@@ -44,6 +46,33 @@ export async function fetchPolicy(): Promise<PolicyResponse | null> {
   } catch {
     return null;
   }
+}
+
+// V2.1 — Status Check: authenticates the user and returns expiry + policy info.
+// On success (200) returns StatusResponse; on failure returns ApiResult so
+// callers narrow by checking `'authenticated' in result`.
+export async function checkStatus(req: StatusCheckRequest): Promise<StatusResponse | ApiResult> {
+  const res = await fetch('/api/password/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+
+  if (res.status === 429) {
+    return { errors: [{ errorCode: 15 }] };
+  }
+
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    return { errors: [{ errorCode: 0, message: 'An unexpected server error occurred.' }] };
+  }
+
+  if (res.ok) {
+    return (await res.json()) as StatusResponse;
+  }
+
+  const data: ApiResult = await res.json();
+  return data;
 }
 
 // FEAT-004: POST the 5-char SHA-1 prefix and receive the raw HIBP range body.

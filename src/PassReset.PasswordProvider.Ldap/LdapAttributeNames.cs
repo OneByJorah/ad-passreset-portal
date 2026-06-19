@@ -25,4 +25,5 @@ internal static class LdapAttributeNames
     public const string PwdProperties        = "pwdProperties";
     public const string PwdHistoryLength     = "pwdHistoryLength";
     public const string DefaultNamingContext = "defaultNamingContext";
+    public const string PwdExpiryComputed    = "msDS-UserPasswordExpiryTimeComputed";
 }

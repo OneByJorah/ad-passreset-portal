@@ -79,6 +79,8 @@ public sealed class PasswordLogRedactionTests
         public IEnumerable<(string Username, string Email, DateTime? PasswordLastSet)> GetUsersInGroup(string groupName) => [];
         public TimeSpan GetDomainMaxPasswordAge() => TimeSpan.FromDays(90);
         public Task<PasswordPolicy?> GetEffectivePasswordPolicyAsync() => Task.FromResult<PasswordPolicy?>(null);
+        public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword) =>
+            Task.FromResult(new PasswordStatus(false, null, null, false, ExpirySource.Unknown, null));
     }
 
     private static void AssertNoSentinels(ListLogEventSink sink)

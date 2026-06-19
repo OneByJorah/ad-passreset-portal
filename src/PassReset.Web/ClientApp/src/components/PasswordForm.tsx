@@ -28,6 +28,8 @@ import { PasswordStrengthMeter } from './PasswordStrengthMeter';
 interface Props {
   settings: ClientSettings;
   onSuccess: () => void;
+  /** Pre-fills the username (e.g. carried over from the Status view). Defaults to empty. */
+  initialUsername?: string;
 }
 
 interface FormErrors {
@@ -65,7 +67,7 @@ function errorMessage(code: number, alerts: ClientSettings['alerts']): string {
   }
 }
 
-export function PasswordForm({ settings, onSuccess }: Props) {
+export function PasswordForm({ settings, onSuccess, initialUsername = '' }: Props) {
   const form    = settings.changePasswordForm ?? {};
   const errors_ = settings.errorsPasswordForm ?? {};
   const regex   = settings.validationRegex    ?? {};
@@ -87,7 +89,7 @@ export function PasswordForm({ settings, onSuccess }: Props) {
     return 'Enter your ' + parts.join(' or ');
   }, [attrs]);
 
-  const [username, setUsername]                 = useState('');
+  const [username, setUsername]                 = useState(initialUsername);
   const [currentPassword, setCurrentPassword]   = useState('');
   const [newPassword, setNewPassword]           = useState('');
   const [newPasswordVerify, setNewPasswordVerify] = useState('');
