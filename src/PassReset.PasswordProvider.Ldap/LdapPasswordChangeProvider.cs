@@ -747,17 +747,65 @@ public sealed class LdapPasswordChangeProvider : IPasswordChangeProvider
     }
 
     /// <summary>
-    /// Resolves the user entry over <see cref="PasswordChangeOptions.AllowedUsernameAttributes"/>,
+    /// Resolves the user entry over <see cref="PasswordChangeOptions.AllowedUsernameAttributes"/>
+    /// on the supplied <paramref name="session"/> (already service-account bound by the caller),
     /// requesting <see cref="LdapAttributeNames.PwdExpiryComputed"/> in the SAME search so AD
-    /// returns the constructed attribute. Binds with the service account (the only bind this
-    /// session abstraction supports — there is no per-user authenticating bind here; the change
-    /// flow proves credentials implicitly via the unicodePwd Modify, which is destructive and
-    /// therefore inappropriate for a read-only status check). Returns
-    /// <see cref="ApiErrorCode.UserNotFound"/> when nothing resolves, <see cref="ApiErrorCode.Generic"/>
-    /// on bind/search failure.
+    /// returns the constructed attribute. Returns <see cref="ApiErrorCode.UserNotFound"/> when
+    /// nothing resolves, <see cref="ApiErrorCode.Generic"/> on search failure. The caller owns
+    /// the session lifetime so the resolved DN can be reused for a per-user authenticating bind.
     /// </summary>
-    private (ApiErrorCode? Error, SearchResultEntry? Entry) ResolveUserEntryWithAuth(string username)
+    private (ApiErrorCode? Error, SearchResultEntry? Entry) ResolveUserEntryWithAuth(
+        ILdapSession session, string username)
     {
+        var opts = _options.Value;
+        try
+        {
+            foreach (var attr in opts.AllowedUsernameAttributes)
+            {
+                var ldapAttr = attr.ToLowerInvariant() switch
+                {
+                    "samaccountname"    => LdapAttributeNames.SamAccountName,
+                    "userprincipalname" => LdapAttributeNames.UserPrincipalName,
+                    "mail"              => LdapAttributeNames.Mail,
+                    _ => null,
+                };
+                if (ldapAttr is null) continue;
+
+                var filter = $"({ldapAttr}={EscapeLdapFilterValue(username)})";
+                var request = new SearchRequest(
+                    distinguishedName: opts.BaseDn,
+                    ldapFilter: filter,
+                    searchScope: SearchScope.Subtree,
+                    attributeList: new[] { LdapAttributeNames.PwdExpiryComputed });
+                var response = session.Search(request);
+
+                if (response.Entries.Count == 1)
+                    return (null, response.Entries[0]);
+
+                if (response.Entries.Count > 1)
+                {
+                    _logger.LogWarning(
+                        "Ambiguous match: {Count} entries for {Attr}={Username}. Treating as not found.",
+                        response.Entries.Count, ldapAttr, username);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is LdapException or DirectoryOperationException)
+        {
+            _logger.LogWarning(ex, "GetUserPasswordStatusAsync: search failed for {Username}", username);
+            return (ApiErrorCode.Generic, null);
+        }
+
+        _logger.LogInformation("GetUserPasswordStatusAsync: user not found: {Username}", username);
+        return (ApiErrorCode.UserNotFound, null);
+    }
+
+    /// <inheritdoc />
+    public async Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
+    {
+        // Resolve → user-bind → attribute-read all share ONE session within this using: the
+        // service-account bind locates the user's DN, then TryBindAsUser verifies the supplied
+        // password on its own connection (without disturbing the service-account connection).
         ILdapSession session;
         try
         {
@@ -766,7 +814,7 @@ public sealed class LdapPasswordChangeProvider : IPasswordChangeProvider
         catch (Exception ex) when (ex is LdapException or DirectoryOperationException)
         {
             _logger.LogWarning(ex, "GetUserPasswordStatusAsync: session creation failed");
-            return (ApiErrorCode.Generic, null);
+            return new PasswordStatus(false, ApiErrorCode.Generic, null, false, ExpirySource.Unknown, null);
         }
 
         using (session)
@@ -775,66 +823,36 @@ public sealed class LdapPasswordChangeProvider : IPasswordChangeProvider
             catch (LdapException ex)
             {
                 _logger.LogWarning(ex, "GetUserPasswordStatusAsync: bind failed for service account");
-                return (ApiErrorCode.Generic, null);
+                return new PasswordStatus(false, ApiErrorCode.Generic, null, false, ExpirySource.Unknown, null);
             }
 
-            var opts = _options.Value;
-            try
+            // 1) Resolve the user's entry and pull the constructed expiry attribute in the same search.
+            var resolved = ResolveUserEntryWithAuth(session, username);
+            if (resolved.Error is not null || resolved.Entry is null)
+                return new PasswordStatus(false, resolved.Error ?? ApiErrorCode.InvalidCredentials, null, false, ExpirySource.Unknown, null);
+
+            // 2) Verify the supplied current password via a read-only authenticating user-bind
+            //    against the resolved DN. A false result means the password is wrong.
+            var userDn = resolved.Entry.DistinguishedName;
+            if (!session.TryBindAsUser(userDn, currentPassword))
             {
-                foreach (var attr in opts.AllowedUsernameAttributes)
-                {
-                    var ldapAttr = attr.ToLowerInvariant() switch
-                    {
-                        "samaccountname"    => LdapAttributeNames.SamAccountName,
-                        "userprincipalname" => LdapAttributeNames.UserPrincipalName,
-                        "mail"              => LdapAttributeNames.Mail,
-                        _ => null,
-                    };
-                    if (ldapAttr is null) continue;
-
-                    var filter = $"({ldapAttr}={EscapeLdapFilterValue(username)})";
-                    var request = new SearchRequest(
-                        distinguishedName: opts.BaseDn,
-                        ldapFilter: filter,
-                        searchScope: SearchScope.Subtree,
-                        attributeList: new[] { LdapAttributeNames.PwdExpiryComputed });
-                    var response = session.Search(request);
-
-                    if (response.Entries.Count == 1)
-                        return (null, response.Entries[0]);
-
-                    if (response.Entries.Count > 1)
-                    {
-                        _logger.LogWarning(
-                            "Ambiguous match: {Count} entries for {Attr}={Username}. Treating as not found.",
-                            response.Entries.Count, ldapAttr, username);
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is LdapException or DirectoryOperationException)
-            {
-                _logger.LogWarning(ex, "GetUserPasswordStatusAsync: search failed for {Username}", username);
-                return (ApiErrorCode.Generic, null);
+                _logger.LogInformation("GetUserPasswordStatusAsync: user-bind failed for {Username}", username);
+                return new PasswordStatus(false, ApiErrorCode.InvalidCredentials, null, false, ExpirySource.Unknown, null);
             }
 
-            _logger.LogInformation("GetUserPasswordStatusAsync: user not found: {Username}", username);
-            return (ApiErrorCode.UserNotFound, null);
+            return await BuildAuthenticatedStatusAsync(resolved.Entry);
         }
     }
 
-    /// <inheritdoc />
-    public async Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
+    /// <summary>
+    /// Builds the success-path <see cref="PasswordStatus"/> from a resolved user entry whose
+    /// password has already been verified: decodes the per-user expiry attribute, degrades to the
+    /// domain-default signal when absent, and attaches the live policy.
+    /// </summary>
+    private async Task<PasswordStatus> BuildAuthenticatedStatusAsync(SearchResultEntry entry)
     {
-        _ = currentPassword; // credential verification is server-side on the change flow; the
-                             // session abstraction exposes no per-user authenticating bind.
-
-        // 1) Resolve the user's entry and pull the constructed expiry attribute in the same search.
-        var resolved = ResolveUserEntryWithAuth(username);
-        if (resolved.Error is not null || resolved.Entry is null)
-            return new PasswordStatus(false, resolved.Error ?? ApiErrorCode.InvalidCredentials, null, false, ExpirySource.Unknown, null);
-
         // 2) Decode the per-user constructed attribute from the entry we already fetched.
-        var raw     = GetFirstStringValueOrNull(resolved.Entry, LdapAttributeNames.PwdExpiryComputed);
+        var raw     = GetFirstStringValueOrNull(entry, LdapAttributeNames.PwdExpiryComputed);
         var decoded = DecodeExpiry(raw);
         var expires = decoded.Expires;
         var never   = decoded.NeverExpires;
