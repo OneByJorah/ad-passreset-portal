@@ -14,6 +14,8 @@ public sealed class LdapSession : ILdapSession
 {
     private readonly LdapConnection _conn;
     private readonly string _hostname;
+    private readonly int _port;
+    private readonly bool _useLdaps;
     private readonly NetworkCredential _creds;
     private readonly ILogger _logger;
     private readonly IReadOnlySet<string> _trustedThumbprints;
@@ -31,6 +33,8 @@ public sealed class LdapSession : ILdapSession
     {
         _conn = new LdapConnection(new LdapDirectoryIdentifier(hostname, port));
         _hostname = hostname;
+        _port = port;
+        _useLdaps = useLdaps;
         _conn.SessionOptions.ProtocolVersion = 3;
         _conn.SessionOptions.SecureSocketLayer = useLdaps;
         _conn.AuthType = AuthType.Basic;
@@ -74,6 +78,26 @@ public sealed class LdapSession : ILdapSession
                 _rootDse = null;
             }
             return _rootDse;
+        }
+    }
+
+    public bool TryBindAsUser(string userDn, string password)
+    {
+        using var userConn = new LdapConnection(new LdapDirectoryIdentifier(_hostname, _port));
+        userConn.SessionOptions.ProtocolVersion = 3;
+        userConn.SessionOptions.SecureSocketLayer = _useLdaps;
+        userConn.AuthType = AuthType.Basic;
+        if (_useLdaps && _trustedThumbprints.Count > 0)
+            userConn.SessionOptions.VerifyServerCertificate = VerifyServerCertificate;
+        try
+        {
+            userConn.Bind(new NetworkCredential(userDn, password));
+            return true;
+        }
+        catch (LdapException ex)
+        {
+            _logger.LogInformation(ex, "User bind failed for status check (expected on bad credentials)");
+            return false;
         }
     }
 

@@ -39,10 +39,25 @@ public sealed class FakeLdapSession : ILdapSession
 
     public Exception? BindThrows { get; set; }
 
+    /// <summary>Configurable result for <see cref="TryBindAsUser"/> (the read-only per-user bind). Defaults to success.</summary>
+    public bool UserBindResult { get; set; } = true;
+
+    public int TryBindAsUserCallCount { get; private set; }
+
+    /// <summary>The most recent (userDn, password) passed to <see cref="TryBindAsUser"/>.</summary>
+    public (string UserDn, string Password)? LastUserBind { get; private set; }
+
     public void Bind()
     {
         BindCallCount++;
         if (BindThrows is not null) throw BindThrows;
+    }
+
+    public bool TryBindAsUser(string userDn, string password)
+    {
+        TryBindAsUserCallCount++;
+        LastUserBind = (userDn, password);
+        return UserBindResult;
     }
 
     public FakeLdapSession OnSearch(string filterContains, SearchResponse response)

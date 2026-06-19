@@ -33,4 +33,12 @@ public interface ILdapSession : IDisposable
     /// Convenience: returns <c>null</c> if the root DSE query fails. Catches and suppresses any <see cref="LdapException"/> or <see cref="DirectoryOperationException"/>; never propagates.
     /// </summary>
     SearchResultEntry? RootDse { get; }
+
+    /// <summary>
+    /// Attempts a read-only authenticating bind with the supplied user DN + password on a
+    /// fresh connection (does not disturb the service-account connection). Returns true on
+    /// success, false on authentication failure. Used by the Status Check to verify the
+    /// user's current password without a destructive modify.
+    /// </summary>
+    bool TryBindAsUser(string userDn, string password);
 }
