@@ -111,6 +111,15 @@ export interface ChangePasswordRequest {
   recaptcha: string;
 }
 
+/** Field-keyed validation/error messages for the Password Change form. */
+export interface FormErrors {
+  username?: string;
+  currentPassword?: string;
+  newPassword?: string;
+  newPasswordVerify?: string;
+  general?: string;
+}
+
 export interface ApiErrorItem {
   errorCode: number;
   fieldName?: string;
