@@ -8,7 +8,10 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(nothing yet)
+### Added
+
+- **Status Check (v2.1)** — new `POST /api/password/status` endpoint allowing users to authenticate with their current password and view their resolved password-expiry date plus the live AD password policy, with a separate 5-req/5-min per-IP rate-limit partition. Per-user expiry reads the constructed attribute `msDS-UserPasswordExpiryTimeComputed` and degrades gracefully to the domain-default with a UI caveat when unreadable. See `docs/adr/0001-status-first-landing-screen.md` for design decisions and `docs/appsettings-Production.md` for configuration.
+- **Status-first landing screen (v2.1)** — the portal now fronts the password-change form with a status view, allowing users to check their expiry and policy before committing to a change. The change flow remains available as the next action and is unchanged; the success card is preserved.
 
 ---
 
