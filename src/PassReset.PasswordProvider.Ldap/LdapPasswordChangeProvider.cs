@@ -11,7 +11,7 @@ namespace PassReset.PasswordProvider.Ldap;
 /// Behavioral parity with the Windows provider is enforced by the shared
 /// <c>IPasswordChangeProviderContract</c> test suite.
 /// </summary>
-public sealed class LdapPasswordChangeProvider : IPasswordChangeProvider
+public sealed class LdapPasswordChangeProvider : IPasswordChanger, IPasswordStatusReader, IDirectoryUserReader
 {
     private const string UserObjectClassFilter = "(objectClass=user)";
 

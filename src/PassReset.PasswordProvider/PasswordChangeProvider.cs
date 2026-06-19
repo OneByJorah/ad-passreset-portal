@@ -13,7 +13,7 @@ namespace PassReset.PasswordProvider;
 /// Windows Active Directory password change provider using System.DirectoryServices.
 /// Requires a domain-joined Windows Server and the DirectoryServices runtime.
 /// </summary>
-public sealed class PasswordChangeProvider : IPasswordChangeProvider
+public sealed class PasswordChangeProvider : IPasswordChanger, IPasswordStatusReader, IDirectoryUserReader
 {
     private readonly PasswordChangeOptions _options;
     private readonly ILogger<PasswordChangeProvider> _logger;

@@ -8,7 +8,7 @@ namespace PassReset.Web.Helpers;
 /// Returns deterministic errors based on well-known test usernames,
 /// allowing UI flows to be exercised without an Active Directory connection.
 /// </summary>
-internal sealed class DebugPasswordChangeProvider : IPasswordChangeProvider
+internal sealed class DebugPasswordChangeProvider : IPasswordChanger, IPasswordStatusReader, IDirectoryUserReader
 {
     private readonly ILogger<DebugPasswordChangeProvider> _logger;
 
