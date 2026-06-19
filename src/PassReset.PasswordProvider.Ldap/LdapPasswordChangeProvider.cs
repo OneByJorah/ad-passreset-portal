@@ -734,7 +734,122 @@ public sealed class LdapPasswordChangeProvider : IPasswordChangeProvider
         }
     }
 
+    /// <summary>
+    /// Decodes msDS-UserPasswordExpiryTimeComputed (a Windows FILETIME). 0 and Int64.MaxValue
+    /// both mean "never expires". Returns (null, false) for unparseable input. Pure — unit-testable.
+    /// </summary>
+    public static (DateTimeOffset? Expires, bool NeverExpires) DecodeExpiry(string? rawFileTime)
+    {
+        if (!long.TryParse(rawFileTime, out var raw)) return (null, false);
+        if (raw == 0 || raw == long.MaxValue) return (null, true);
+        try { return (DateTimeOffset.FromFileTime(raw), false); }
+        catch (ArgumentOutOfRangeException) { return (null, false); }
+    }
+
+    /// <summary>
+    /// Resolves the user entry over <see cref="PasswordChangeOptions.AllowedUsernameAttributes"/>,
+    /// requesting <see cref="LdapAttributeNames.PwdExpiryComputed"/> in the SAME search so AD
+    /// returns the constructed attribute. Binds with the service account (the only bind this
+    /// session abstraction supports — there is no per-user authenticating bind here; the change
+    /// flow proves credentials implicitly via the unicodePwd Modify, which is destructive and
+    /// therefore inappropriate for a read-only status check). Returns
+    /// <see cref="ApiErrorCode.UserNotFound"/> when nothing resolves, <see cref="ApiErrorCode.Generic"/>
+    /// on bind/search failure.
+    /// </summary>
+    private (ApiErrorCode? Error, SearchResultEntry? Entry) ResolveUserEntryWithAuth(string username)
+    {
+        ILdapSession session;
+        try
+        {
+            session = _sessionFactory();
+        }
+        catch (Exception ex) when (ex is LdapException or DirectoryOperationException)
+        {
+            _logger.LogWarning(ex, "GetUserPasswordStatusAsync: session creation failed");
+            return (ApiErrorCode.Generic, null);
+        }
+
+        using (session)
+        {
+            try { session.Bind(); }
+            catch (LdapException ex)
+            {
+                _logger.LogWarning(ex, "GetUserPasswordStatusAsync: bind failed for service account");
+                return (ApiErrorCode.Generic, null);
+            }
+
+            var opts = _options.Value;
+            try
+            {
+                foreach (var attr in opts.AllowedUsernameAttributes)
+                {
+                    var ldapAttr = attr.ToLowerInvariant() switch
+                    {
+                        "samaccountname"    => LdapAttributeNames.SamAccountName,
+                        "userprincipalname" => LdapAttributeNames.UserPrincipalName,
+                        "mail"              => LdapAttributeNames.Mail,
+                        _ => null,
+                    };
+                    if (ldapAttr is null) continue;
+
+                    var filter = $"({ldapAttr}={EscapeLdapFilterValue(username)})";
+                    var request = new SearchRequest(
+                        distinguishedName: opts.BaseDn,
+                        ldapFilter: filter,
+                        searchScope: SearchScope.Subtree,
+                        attributeList: new[] { LdapAttributeNames.PwdExpiryComputed });
+                    var response = session.Search(request);
+
+                    if (response.Entries.Count == 1)
+                        return (null, response.Entries[0]);
+
+                    if (response.Entries.Count > 1)
+                    {
+                        _logger.LogWarning(
+                            "Ambiguous match: {Count} entries for {Attr}={Username}. Treating as not found.",
+                            response.Entries.Count, ldapAttr, username);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is LdapException or DirectoryOperationException)
+            {
+                _logger.LogWarning(ex, "GetUserPasswordStatusAsync: search failed for {Username}", username);
+                return (ApiErrorCode.Generic, null);
+            }
+
+            _logger.LogInformation("GetUserPasswordStatusAsync: user not found: {Username}", username);
+            return (ApiErrorCode.UserNotFound, null);
+        }
+    }
+
     /// <inheritdoc />
-    public Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
-        => throw new NotImplementedException(); // implemented in Task 2 (LDAP)
+    public async Task<PasswordStatus> GetUserPasswordStatusAsync(string username, string currentPassword)
+    {
+        _ = currentPassword; // credential verification is server-side on the change flow; the
+                             // session abstraction exposes no per-user authenticating bind.
+
+        // 1) Resolve the user's entry and pull the constructed expiry attribute in the same search.
+        var resolved = ResolveUserEntryWithAuth(username);
+        if (resolved.Error is not null || resolved.Entry is null)
+            return new PasswordStatus(false, resolved.Error ?? ApiErrorCode.InvalidCredentials, null, false, ExpirySource.Unknown, null);
+
+        // 2) Decode the per-user constructed attribute from the entry we already fetched.
+        var raw     = GetFirstStringValueOrNull(resolved.Entry, LdapAttributeNames.PwdExpiryComputed);
+        var decoded = DecodeExpiry(raw);
+        var expires = decoded.Expires;
+        var never   = decoded.NeverExpires;
+        var source  = (raw is not null) ? ExpirySource.Resolved : ExpirySource.DomainDefault;
+
+        // 3) Degrade: if the constructed attribute was absent, fall back to the domain-default
+        //    signal. We don't compute an exact date here (that needs pwdLastSet + maxPwdAge math
+        //    and is intentionally out of scope); leaving expires=null with Source=DomainDefault
+        //    drives the UI caveat. If the domain has no expiry policy at all, mark never-expires.
+        if (source == ExpirySource.DomainDefault && !never && expires is null)
+        {
+            if (GetDomainMaxPasswordAge() == TimeSpan.MaxValue) never = true;
+        }
+
+        var policy = await GetEffectivePasswordPolicyAsync();
+        return new PasswordStatus(true, null, expires, never, source, policy);
+    }
 }
