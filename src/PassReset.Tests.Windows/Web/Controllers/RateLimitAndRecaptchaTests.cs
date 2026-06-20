@@ -101,11 +101,11 @@ public class RateLimitAndRecaptchaTests
     /// STAB-015: test-double SIEM recorder. The rate-limiter OnRejected path uses the legacy
     /// <c>LogEvent(SiemEventType,...)</c> overload, so both overloads capture the event type.
     /// </summary>
-    internal sealed class RecordingSiem : PassReset.Web.Services.ISiemService
+    internal sealed class RecordingSiem : PassReset.Common.ISiemService
     {
-        public List<PassReset.Web.Services.SiemEventType> Events { get; } = new();
-        public void LogEvent(PassReset.Web.Services.SiemEventType eventType, string username, string ipAddress, string? detail = null) => Events.Add(eventType);
-        public void LogEvent(PassReset.Web.Services.AuditEvent evt) => Events.Add(evt.EventType);
+        public List<PassReset.Common.SiemEventType> Events { get; } = new();
+        public void LogEvent(PassReset.Common.SiemEventType eventType, string username, string ipAddress, string? detail = null) => Events.Add(eventType);
+        public void LogEvent(PassReset.Common.AuditEvent evt) => Events.Add(evt.EventType);
     }
 
     /// <summary>
@@ -136,9 +136,9 @@ public class RateLimitAndRecaptchaTests
             });
             builder.ConfigureTestServices(services =>
             {
-                var existing = services.Where(d => d.ServiceType == typeof(PassReset.Web.Services.ISiemService)).ToList();
+                var existing = services.Where(d => d.ServiceType == typeof(PassReset.Common.ISiemService)).ToList();
                 foreach (var d in existing) services.Remove(d);
-                services.AddSingleton<PassReset.Web.Services.ISiemService>(Recorder);
+                services.AddSingleton<PassReset.Common.ISiemService>(Recorder);
             });
         }
     }
@@ -256,7 +256,7 @@ public class RateLimitAndRecaptchaTests
         var rejected = await client.PostAsJsonAsync("/api/password", MakeRequest("alice"));
 
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
-        Assert.Contains(PassReset.Web.Services.SiemEventType.RateLimitExceeded, factory.Recorder.Events);
+        Assert.Contains(PassReset.Common.SiemEventType.RateLimitExceeded, factory.Recorder.Events);
     }
 
     [Fact]

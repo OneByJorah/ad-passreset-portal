@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using PassReset.Common;
 using PassReset.Web.Services;
 
 namespace PassReset.Web.Models;

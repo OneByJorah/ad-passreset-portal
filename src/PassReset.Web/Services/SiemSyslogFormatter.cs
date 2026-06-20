@@ -1,3 +1,5 @@
+using PassReset.Common;
+
 namespace PassReset.Web.Services;
 
 /// <summary>

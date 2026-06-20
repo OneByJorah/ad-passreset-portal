@@ -1,4 +1,4 @@
-namespace PassReset.Web.Services;
+namespace PassReset.Common;
 
 /// <summary>
 /// STAB-015 (D-10) allowlist DTO for audit events. No secret fields exist on this

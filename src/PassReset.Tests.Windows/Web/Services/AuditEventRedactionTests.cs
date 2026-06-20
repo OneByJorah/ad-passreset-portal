@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
+using PassReset.Common;
 using PassReset.Web.Services;
 
 namespace PassReset.Tests.Windows.Web.Services;
