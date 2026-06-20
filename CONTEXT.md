@@ -46,6 +46,14 @@ _Avoid_: user lookup, directory query
 Offline password-validation rules applied *before* the AD round-trip: banned-word substring matching and an offline Pwned (HaveIBeenPwned) SHA-1 lookup against operator-supplied files. A validation layer, not a credential store.
 _Avoid_: Local password database, local DB (the implementation stores no credentials despite the historical phase name "local-password-db")
 
+**Change Flow**:
+The full server-side sequence a Password Change request runs through *above* the [[Password Changer]] seam: minimum-distance check, reCAPTCHA gate, the credentialed change itself, [[Error Redaction]], and the SIEM audit emitted at each decision point. It also names the notification *intent* (a successful change should be emailed) without performing the send. A deep module owning this sequence, distinct from the controller that adapts it to HTTP and from the [[Password Changer]] that performs the directory write. A Status Check shares the same preamble but is a *read*, not a Change — it is a separate flow, not a mode of this one. The attempt-started SIEM event marks the *start of the flow*, which begins only after the controller's framework-bound field validation passes; a request that fails that validation is audited as a validation failure, never as a started attempt.
+_Avoid_: orchestrator, pipeline, handler, password service
+
+**Error Redaction**:
+The enumeration-safety rule that decides whether a precise failure code may reach the client or must collapse to a generic one (STAB-013): `InvalidCredentials` and `UserNotFound` leak whether a username exists in AD and are redacted in production; portal-lockout codes leak only per-account throttling state and are *not* redacted. SIEM granularity is preserved independently of what the client sees. A seam: the rule lives behind one interface, decoupled from the hosting concept ("are we in production?") that triggers it.
+_Avoid_: error handler, error filter, sanitizer (it neither handles nor sanitizes; it redacts enumeration vectors)
+
 **Form Validation** (frontend):
 The pure, synchronous client-side check that runs before a Change is submitted: required fields, username format (per [[Provider Mode]]'s allowed attributes), new-password match, and minimum Levenshtein distance from the current password. Lives beside the component, not inside it: a pure function taking the four field values plus a flat settings subset (compiled regexes, allowed attributes, `useEmail`, `minimumDistance`, message strings) and returning field-keyed errors. Regex *compilation* (with bad-pattern-disables-the-check guarding) stays in the component; the validator receives already-compiled `RegExp` objects.
 _Avoid_: form validator (names the function, not the concept), client validation

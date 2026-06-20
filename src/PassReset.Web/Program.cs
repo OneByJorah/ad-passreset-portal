@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
 using PassReset.Common;
+using PassReset.Common.ChangeFlow;
 using PassReset.PasswordProvider;
 using PassReset.PasswordProvider.Ldap;
 using PassReset.Web.Configuration;
@@ -428,6 +429,16 @@ try
 
     // ─── SIEM service ─────────────────────────────────────────────────────────────
     builder.Services.AddSingleton<ISiemService, SiemService>();
+
+    // ─── Change Flow (deep module) + its seams ───────────────────────────────────
+    builder.Services.AddSingleton<IErrorRedactor, HostEnvironmentErrorRedactor>();
+    builder.Services.AddSingleton<IChangeFlowSettings, ChangeFlowSettingsAdapter>();
+    builder.Services.AddSingleton<IChangePasswordFlow>(sp => new ChangePasswordFlow(
+        sp.GetRequiredService<IPasswordChanger>(),
+        sp.GetRequiredService<IRecaptchaVerifier>(),
+        sp.GetRequiredService<ISiemService>(),
+        sp.GetRequiredService<IErrorRedactor>(),
+        sp.GetRequiredService<IChangeFlowSettings>()));
 
     // ─── AD password-policy cache (FEAT-002) ─────────────────────────────────────
     builder.Services.AddMemoryCache();

@@ -1,3 +1,4 @@
+using PassReset.Common;
 using PassReset.Web.Services;
 
 namespace PassReset.Tests.Windows.Web.Services;

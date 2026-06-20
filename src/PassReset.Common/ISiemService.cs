@@ -1,4 +1,4 @@
-namespace PassReset.Web.Services;
+namespace PassReset.Common;
 
 /// <summary>
 /// Security event types forwarded to the SIEM via syslog and/or email alerts.

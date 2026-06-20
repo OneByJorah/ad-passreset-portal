@@ -1,4 +1,4 @@
-namespace PassReset.Web.Services;
+namespace PassReset.Common;
 
 /// <summary>
 /// Verifies a reCAPTCHA v3 token against the configured provider. Returns true when the

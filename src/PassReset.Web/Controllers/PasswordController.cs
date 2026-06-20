@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using PassReset.Common;
+using PassReset.Common.ChangeFlow;
 using PassReset.PasswordProvider;
 using PassReset.Web.Models;
 using PassReset.Web.Services;
@@ -18,7 +19,6 @@ namespace PassReset.Web.Controllers;
 [Route("api/[controller]")]
 public sealed class PasswordController : ControllerBase
 {
-    private readonly IPasswordChanger _changer;
     private readonly IPasswordStatusReader _statusReader;
     private readonly IDirectoryUserReader _directoryReader;
     private readonly IEmailService _emailService;
@@ -31,13 +31,13 @@ public sealed class PasswordController : ControllerBase
     private readonly IHostEnvironment _hostEnvironment;
     private readonly ILogger<PasswordController> _logger;
     private readonly IRecaptchaVerifier _recaptchaVerifier;
+    private readonly IChangePasswordFlow _changeFlow;
 
     // Pre-compiled 5-char hex regex for pwned-check prefix validation.
     private static readonly Regex Sha1PrefixRegex =
         new("^[a-fA-F0-9]{5}$", RegexOptions.Compiled);
 
     public PasswordController(
-        IPasswordChanger changer,
         IPasswordStatusReader statusReader,
         IDirectoryUserReader directoryReader,
         IEmailService emailService,
@@ -49,9 +49,9 @@ public sealed class PasswordController : ControllerBase
         IOptions<PasswordChangeOptions> passwordOptions,
         IHostEnvironment hostEnvironment,
         IRecaptchaVerifier recaptchaVerifier,
+        IChangePasswordFlow changeFlow,
         ILogger<PasswordController> logger)
     {
-        _changer         = changer;
         _statusReader    = statusReader;
         _directoryReader = directoryReader;
         _emailService       = emailService;
@@ -63,6 +63,7 @@ public sealed class PasswordController : ControllerBase
         _passwordOptions    = passwordOptions.Value;
         _hostEnvironment    = hostEnvironment;
         _recaptchaVerifier  = recaptchaVerifier;
+        _changeFlow         = changeFlow;
         _logger             = logger;
     }
 
@@ -146,86 +147,66 @@ public sealed class PasswordController : ControllerBase
     {
         var clientIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
-        Audit("AttemptStarted", model.Username, clientIp, SiemEventType.PasswordChangeAttemptStarted);
-
         if (!ModelState.IsValid)
         {
-            Audit("ValidationFailed", model.Username, clientIp, SiemEventType.ValidationFailed);
+            _siemService.LogEvent(SiemEventType.ValidationFailed, model.Username, clientIp);
             return BadRequest(ApiResult.FromModelStateErrors(ModelState));
         }
 
-        // Validate minimum Levenshtein distance between old and new password
-        var settings = _clientSettings.Value;
-
-        if (settings.MinimumDistance > 0 &&
-            PasswordDistance.Levenshtein(model.CurrentPassword, model.NewPassword) < settings.MinimumDistance)
-        {
-            Audit("DistanceTooLow", model.Username, clientIp);
-            var result = new ApiResult();
-            result.Errors.Add(new ApiErrorItem(ApiErrorCode.MinimumDistance));
-            return BadRequest(result);
-        }
-
-        // reCAPTCHA v3 validation (skipped unless Enabled = true and PrivateKey is set)
-        var recaptchaConfig = settings.Recaptcha;
-        if (recaptchaConfig?.Enabled == true && !string.IsNullOrWhiteSpace(recaptchaConfig.PrivateKey))
-        {
-            if (!await _recaptchaVerifier.VerifyAsync(model.Recaptcha, "change_password", clientIp))
-            {
-                Audit("RecaptchaFailed", model.Username, clientIp, SiemEventType.RecaptchaFailed);
-                return BadRequest(ApiResult.InvalidCaptcha());
-            }
-        }
-
-        // Open request-scoped logging context so every downstream log event (provider,
-        // decorator, email fire-and-forget, SIEM audit) inherits Username / TraceId / ClientIp.
-        // MUST be `using var` so the scope survives the awaited provider call (async disposal).
         var traceId = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? "unknown";
         using var requestScope = _logger.BeginScope(new Dictionary<string, object>
         {
             ["Username"] = model.Username,
-            ["TraceId"] = traceId,
+            ["TraceId"]  = traceId,
             ["ClientIp"] = clientIp,
         });
 
-        // Perform the password change
-        var error = await _changer.PerformPasswordChangeAsync(model.Username, model.CurrentPassword, model.NewPassword);
-
-        if (error is not null)
+        var request = new ChangePasswordRequest(
+            Username:        model.Username,
+            CurrentPassword: model.CurrentPassword,
+            NewPassword:     model.NewPassword)
         {
-            var siemType = MapErrorCodeToSiemEvent(error.ErrorCode);
-            Audit($"Failed:{error.ErrorCode}", model.Username, clientIp, siemType, error.Message);
+            Recaptcha = model.Recaptcha,
+        };
+
+        var outcome = await _changeFlow.HandleAsync(request, new RequestContext(clientIp, traceId));
+
+        if (outcome.Disposition != Disposition.Ok)
+        {
             var result = new ApiResult();
-            result.Errors.Add(RedactIfProduction(error));  // STAB-013 collapse
+            result.Errors.Add(outcome.Error!);   // already redacted by the flow's IErrorRedactor
             return BadRequest(result);
         }
 
-        Audit("Success", model.Username, clientIp, SiemEventType.PasswordChanged);
+        if (outcome.Notification is { } notify)
+            FireNotification(notify);
 
-        // Fire-and-forget email notification — capture HttpContext values before Task.Run
-        if (_emailNotifSettings.Value.Enabled)
+        return Ok(new ApiResult(outcome.SuccessMessage));
+    }
+
+    /// <summary>
+    /// Fire-and-forget password-changed email. The directory lookup + templating run OFF the
+    /// HTTP response path (Task.Run) so SMTP/LDAP latency never blocks the response — identical
+    /// to the pre-refactor behavior.
+    /// </summary>
+    private void FireNotification(NotificationRequest notify)
+    {
+        var emailSvc = _emailService;
+        var notifCfg = _emailNotifSettings.Value;
+        var directoryReader = _directoryReader;
+
+        _ = Task.Run(async () =>
         {
-            var username  = model.Username;
-            var timestamp = DateTime.UtcNow.ToString("u");
-            var ip        = clientIp;
-            var emailSvc  = _emailService;
-            var notifCfg  = _emailNotifSettings.Value;
+            var emailAddress = directoryReader.GetUserEmail(notify.Username);
+            if (string.IsNullOrWhiteSpace(emailAddress)) return;
 
-            _ = Task.Run(async () =>
-            {
-                var emailAddress = _directoryReader.GetUserEmail(username);
-                if (string.IsNullOrWhiteSpace(emailAddress)) return;
+            var body = notifCfg.BodyTemplate
+                .Replace("{Username}",  notify.Username,  StringComparison.Ordinal)
+                .Replace("{Timestamp}", notify.Timestamp, StringComparison.Ordinal)
+                .Replace("{IpAddress}", notify.ClientIp,  StringComparison.Ordinal);
 
-                var body = notifCfg.BodyTemplate
-                    .Replace("{Username}",  username,  StringComparison.Ordinal)
-                    .Replace("{Timestamp}", timestamp, StringComparison.Ordinal)
-                    .Replace("{IpAddress}", ip,        StringComparison.Ordinal);
-
-                await emailSvc.SendAsync(emailAddress, username, notifCfg.Subject, body);
-            });
-        }
-
-        return Ok(new ApiResult("Password changed successfully."));
+            await emailSvc.SendAsync(emailAddress, notify.Username, notifCfg.Subject, body);
+        });
     }
 
     /// <summary>
