@@ -19,7 +19,6 @@ namespace PassReset.Web.Controllers;
 [Route("api/[controller]")]
 public sealed class PasswordController : ControllerBase
 {
-    private readonly IPasswordChanger _changer;
     private readonly IPasswordStatusReader _statusReader;
     private readonly IDirectoryUserReader _directoryReader;
     private readonly IEmailService _emailService;
@@ -39,7 +38,6 @@ public sealed class PasswordController : ControllerBase
         new("^[a-fA-F0-9]{5}$", RegexOptions.Compiled);
 
     public PasswordController(
-        IPasswordChanger changer,
         IPasswordStatusReader statusReader,
         IDirectoryUserReader directoryReader,
         IEmailService emailService,
@@ -54,7 +52,6 @@ public sealed class PasswordController : ControllerBase
         IChangePasswordFlow changeFlow,
         ILogger<PasswordController> logger)
     {
-        _changer         = changer;
         _statusReader    = statusReader;
         _directoryReader = directoryReader;
         _emailService       = emailService;
