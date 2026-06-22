@@ -4,7 +4,8 @@
 
 | Version | Status                        |
 |---------|-------------------------------|
-| 2.0.x   | Supported (current minor)     |
+| 2.1.x   | Supported (current minor)     |
+| 2.0.x   | Security fixes only           |
 | 1.4.x   | Security fixes only           |
 | < 1.4   | Not supported                 |
 

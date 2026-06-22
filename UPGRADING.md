@@ -31,6 +31,33 @@ Secret handling: [`docs/Secret-Management.md`](docs/Secret-Management.md).
 
 ## Version-specific notes
 
+### v2.1.0 — Status Check + status-first landing screen
+
+**No breaking changes.** The password-change flow and its API are byte-for-byte unchanged, and
+no `appsettings.Production.json` edits are required to upgrade. The new Status Check reuses the
+existing current-password AD bind — no new authentication primitive, no new credentials.
+
+After upgrading, the portal's landing screen is the **Status view**: users authenticate with
+their current password and see their password-expiry date and the live AD policy, with Password
+Change offered as the next action. See
+[`docs/adr/0001-status-first-landing-screen.md`](docs/adr/0001-status-first-landing-screen.md).
+
+#### Read permission for per-user expiry (`msDS-UserPasswordExpiryTimeComputed`)
+
+The Status Check resolves each user's exact expiry from the constructed AD attribute
+`msDS-UserPasswordExpiryTimeComputed`.
+
+- **Windows provider (domain-joined / `UseAutomaticContext`):** no action — the attribute is
+  readable by authenticated domain users by default.
+- **LDAP provider (`ProviderMode: Ldap`, typically Linux/Docker):** confirm the **bind account**
+  can read this constructed attribute on the target user objects. If it cannot, the Status Check
+  does not fail — it **degrades** to the domain-default expiry and the UI shows a caveat that the
+  date may be approximate (e.g. under a fine-grained password policy / PSO). Granting the bind
+  account read access to the attribute restores exact per-user dates.
+
+No other configuration is needed; the Status Check shares the change flow's reCAPTCHA gate and
+runs under its own `status-fixed-window` rate-limit partition (5 requests / 5 min / IP).
+
 ### v2.0.0 — Cross-platform provider, local policy, admin UI, hosting modes
 
 **No breaking changes for existing IIS deployments.** Every v2.0 capability is opt-in. An
