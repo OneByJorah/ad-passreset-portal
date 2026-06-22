@@ -2,7 +2,9 @@
 
 Step-by-step instructions for deploying PassReset on **Windows Server 2019 / 2022 / 2025** with **IIS 10**.
 
-> **PassReset v2.0+ supports Linux deployment without IIS.** The cross-platform LDAP provider runs on any `net10.0` host (Linux, macOS, Docker). See [`AD-ServiceAccount-LDAP-Setup.md`](AD-ServiceAccount-LDAP-Setup.md) for the non-Windows path. This guide remains the canonical reference for Windows / IIS deployments.
+> **Choosing a hosting mode?** See [`Deployment.md`](Deployment.md) for the mode-selection hub (IIS / Windows Service / Console / Linux-LDAP). This guide is the canonical, detailed reference for the **IIS** mode; Service and Console modes are documented in `Deployment.md`.
+>
+> **PassReset v2.0+ supports Linux deployment without IIS.** The cross-platform LDAP provider runs on any `net10.0` host (Linux, macOS, Docker). See [`AD-ServiceAccount-LDAP-Setup.md`](AD-ServiceAccount-LDAP-Setup.md) for the non-Windows path.
 
 ---
 
