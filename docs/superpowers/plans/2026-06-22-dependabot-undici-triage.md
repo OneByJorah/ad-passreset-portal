@@ -13,6 +13,46 @@ moderate on the default branch).
 
 ---
 
+## ⚠️ UPDATE 2026-06-22 — investigated; bump is SAFE, CI red is NOT the bump
+
+PR #68 was rebased onto current master and CI re-run (`run 27939583678`). Two red jobs, **neither
+caused by undici 7.28.0** — verified by local reproduction:
+
+1. **`integration-tests-ldap` job: `SAMBA_TEST_OLD_PASSWORD is empty` → exit 1.**
+   Environmental: Dependabot PRs don't receive repo **secrets** by default, so the Samba LDAP
+   integration job can't run. Affects *any* Dependabot PR; nothing to do with undici. (Almost
+   certainly the cause of the original 2026-06-20 failure too.)
+
+2. **`PasswordForm.test.tsx`: 2 failures** — `shows PasswordTooRecentlyChanged message on BUG-002
+   error code` couldn't find `/one more failed attempt/i` and `/changed too recently/i`.
+   **Flaky, not undici.** Reproduction (local):
+   - Baseline undici **7.27.0**: the test **passes**.
+   - undici **7.28.0** (forced via `overrides`, lockfile-only): the test **also passes** — full
+     `PasswordForm.test.tsx` is **10/10 green** locally on 7.28.0.
+   - In CI the failing run took **16.6 s** for that file (vs <1 s local). The test uses async
+     `findAllByText` with the default ~1 s timeout; under heavy concurrent CI load (backend +
+     frontend + LDAP jobs on one runner) the element rendered after the query gave up. A
+     **pre-existing latent flake**, surfaced by CI load — independent of this PR.
+
+**Conclusion:** undici 7.28.0 is safe to land (test-only transitive under jsdom; full frontend
+suite green locally on the bumped version). The two red CI jobs are (1) a Dependabot-secrets
+limitation and (2) a flaky timing-sensitive test — both orthogonal to the bump.
+
+### Revised next steps
+- [ ] **Merge decision (human):** the bump is verified safe; PR #68 can merge once the
+      *non-undici* red checks are understood/accepted — admin-merge, or re-run `tests` (the
+      PasswordForm flake may pass on retry; the LDAP-secrets job fails for any Dependabot PR by design).
+- [ ] **Follow-up (separate, recommended):** de-flake `PasswordForm.test.tsx` BUG-002 test (raise
+      the `findAllByText` timeout / await a stable anchor) so CI load can't trip it. The real
+      actionable defect this triage uncovered.
+- [ ] After merge, confirm alerts #5/#6 auto-close.
+
+> **Correction note:** an earlier pass this session reported the bump "verified safe, just merge"
+> after a partial local check that reverted before running the frontend suite. That was
+> incomplete. The above is the corrected, fully-reproduced conclusion.
+
+---
+
 ## The alerts (both fixed by undici 7.28.0)
 
 | # | Severity | GHSA | Summary |
