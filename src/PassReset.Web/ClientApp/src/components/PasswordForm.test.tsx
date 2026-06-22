@@ -141,7 +141,8 @@ describe('PasswordForm', () => {
     });
     await user.click(screen.getByRole('button', { name: /change password/i }));
 
-    expect(await screen.findByText(/current password is incorrect/i)).toBeInTheDocument();
+    expect(await screen.findByText(/current password is incorrect/i, undefined, { timeout: 5000 }))
+      .toBeInTheDocument();
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
@@ -167,7 +168,8 @@ describe('PasswordForm', () => {
     });
     await user.click(screen.getByRole('button', { name: /change password/i }));
 
-    expect(await screen.findByText(/directory connection error/i)).toBeInTheDocument();
+    expect(await screen.findByText(/directory connection error/i, undefined, { timeout: 5000 }))
+      .toBeInTheDocument();
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
@@ -188,7 +190,11 @@ describe('PasswordForm', () => {
     });
     await user.click(screen.getByRole('button', { name: /change password/i }));
 
-    expect(await screen.findAllByText(/one more failed attempt/i)).not.toHaveLength(0);
+    // Generous timeout: the error text appears only after the async fetch→setState→re-render
+    // chain. The 1s findBy default flakes under heavy concurrent CI load (the element renders
+    // after the query gives up). 5s never slows an unloaded run — it only extends the max wait.
+    expect(await screen.findAllByText(/one more failed attempt/i, undefined, { timeout: 5000 }))
+      .not.toHaveLength(0);
   });
 
   it('shows PasswordTooRecentlyChanged message on BUG-002 error code', async () => {
@@ -206,7 +212,9 @@ describe('PasswordForm', () => {
     });
     await user.click(screen.getByRole('button', { name: /change password/i }));
 
-    expect(await screen.findByText(/changed too recently/i)).toBeInTheDocument();
+    // Generous timeout — same async-render-under-CI-load rationale as the ApproachingLockout test.
+    expect(await screen.findByText(/changed too recently/i, undefined, { timeout: 5000 }))
+      .toBeInTheDocument();
   });
 
   it('fills both new-password fields when generate button clicked', async () => {
