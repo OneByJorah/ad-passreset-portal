@@ -542,6 +542,21 @@ public sealed class PasswordChangeProvider : IPasswordChanger, IPasswordStatusRe
     }
 
     /// <summary>
+    /// Decides whether a <c>ChangePassword</c> COMException (already determined NOT to be a
+    /// policy-violation HResult) may fall back to the administrative <c>SetPassword</c> reset.
+    /// Fallback is permitted ONLY with explicit credentials (<paramref name="useAutomaticContext"/>
+    /// false) AND when the operator has opted in (<paramref name="allowSetPasswordFallback"/> true).
+    /// Static + logger-free so the gating rule is unit-testable without a live principal.
+    /// </summary>
+    /// <remarks>
+    /// SetPassword bypasses AD password-history enforcement, so it is off by default. The
+    /// minimum-password-age rejection is classified and thrown <em>before</em> this check
+    /// (see <see cref="ClassifyChangePasswordHResult"/>), so it can never reach the fallback.
+    /// </remarks>
+    internal static bool ShouldFallBackToSetPassword(bool useAutomaticContext, bool allowSetPasswordFallback)
+        => !useAutomaticContext && allowSetPasswordFallback;
+
+    /// <summary>
     /// STAB-004: classifies an <see cref="UnauthorizedAccessException"/> wrapping E_ACCESSDENIED.
     /// Throws <see cref="ApiErrorException"/>(PasswordTooRecentlyChanged) for policy-violation
     /// HResults; rethrows the original for genuine permission failures so the outer catch logs
@@ -588,7 +603,7 @@ public sealed class PasswordChangeProvider : IPasswordChanger, IPasswordStatusRe
             // "Reset Password" rights but not "Change Password" rights on the target object.
             // SetPassword is an administrative reset and is only attempted with explicit credentials
             // when explicitly opted in, because it bypasses AD password history enforcement.
-            if (_options.UseAutomaticContext || !_options.AllowSetPasswordFallback)
+            if (!ShouldFallBackToSetPassword(_options.UseAutomaticContext, _options.AllowSetPasswordFallback))
             {
                 ExceptionChainLogger.LogExceptionChain(_logger, comEx,
                     "ChangePassword failed (HRESULT={HResult}); SetPassword fallback is {Status} " +

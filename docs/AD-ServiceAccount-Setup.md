@@ -301,6 +301,53 @@ Follow Option A Steps 1–4 to create the account and delegate permissions. Set 
 
 ---
 
+## `SetPassword` fallback (`AllowSetPasswordFallback`)
+
+By default PassReset performs a **user-initiated change** (`ChangePassword`), which proves the
+user's current password and respects AD password-history enforcement. In some environments that
+call can be rejected at the protocol level with a `COMException` — most commonly when the service
+account holds **Reset Password** but not the user-self **Change Password** extended right on the
+target object.
+
+`PasswordChangeOptions.AllowSetPasswordFallback` (default **`false`**) lets the provider fall back
+to the administrative `SetPassword` reset when that happens.
+
+### When it applies
+
+The fallback is attempted **only** when **both** are true:
+
+| Condition | Setting |
+|---|---|
+| Explicit LDAP credentials (not domain-joined auto-context) | `UseAutomaticContext: false` |
+| Operator has opted in | `AllowSetPasswordFallback: true` |
+
+Under automatic (domain-joined) context the fallback is **never** used, even with the flag on.
+This is the Windows AccountManagement provider only — the LDAP provider ignores the flag (AD's
+server-side enforcement is authoritative there).
+
+### AD right required
+
+`SetPassword` is an administrative reset, so the service account needs the **Reset Password**
+extended right on the target user OU(s) — the same right already delegated in Option A Step 2
+(`dsacls $ou /G "${sid}:CA;Reset Password;User"`). No additional delegation beyond the standard
+setup is required.
+
+### ⚠️ Security trade-off — bypasses password history
+
+`SetPassword` **bypasses AD password-history enforcement**: a user could set a password they
+recently used. For this reason the fallback is **off by default**.
+
+The portal still classifies and blocks the **minimum-password-age** rejection *before* any
+fallback (HRESULTs `E_ACCESSDENIED` / `ERROR_DS_CONSTRAINT_VIOLATION` are returned as
+`PasswordTooRecentlyChanged`), so min-age is **never** bypassed by the fallback — only history is.
+
+**Recommendation:** leave `AllowSetPasswordFallback` disabled unless a specific
+`COMException`-on-`ChangePassword` scenario in your environment requires it, and you accept the
+history-bypass trade-off. Prefer granting the service account the correct **Change Password**
+right instead, which keeps full history enforcement.
+
+---
+
 ## Verification checklist
 
 Run these from the IIS server after completing the setup:
