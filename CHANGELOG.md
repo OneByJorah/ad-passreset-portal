@@ -8,10 +8,22 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+---
+
+## [2.1.0] — 2026-06-22
+
+Minor release. Adds an authenticated, read-only **Status Check** and makes it the portal's
+landing screen, so users can see their password-expiry date and the live AD policy before
+deciding to change. **No breaking changes** — the password-change flow and its API are
+unchanged, and the Status Check reuses the existing current-password AD bind (no new
+authentication primitive). Operators using the LDAP provider should confirm the bind account
+can read the constructed attribute `msDS-UserPasswordExpiryTimeComputed`; see
+[`UPGRADING.md`](UPGRADING.md) for the read-permission note.
+
 ### Added
 
-- **Status Check (v2.1)** — new `POST /api/password/status` endpoint allowing users to authenticate with their current password and view their resolved password-expiry date plus the live AD password policy, with a separate 5-req/5-min per-IP rate-limit partition. Per-user expiry reads the constructed attribute `msDS-UserPasswordExpiryTimeComputed` and degrades gracefully to the domain-default with a UI caveat when unreadable. See `docs/adr/0001-status-first-landing-screen.md` for design decisions and `docs/appsettings-Production.md` for configuration.
-- **Status-first landing screen (v2.1)** — the portal now fronts the password-change form with a status view, allowing users to check their expiry and policy before committing to a change. The change flow remains available as the next action and is unchanged; the success card is preserved.
+- **Status Check** — new `POST /api/password/status` endpoint allowing users to authenticate with their current password and view their resolved password-expiry date plus the live AD password policy, with a separate 5-req/5-min per-IP rate-limit partition. Per-user expiry reads the constructed attribute `msDS-UserPasswordExpiryTimeComputed` and degrades gracefully to the domain-default with a UI caveat when unreadable. Enumeration-safe: failures route through the same STAB-013 redaction as the change flow (precise code kept for SIEM, collapsed to `Generic` on the wire in Production). See `docs/adr/0001-status-first-landing-screen.md` for design decisions and `docs/appsettings-Production.md` for configuration. *(common, provider, web)*
+- **Status-first landing screen** — the portal now fronts the password-change form with a status view, allowing users to check their expiry and policy before committing to a change. The change flow remains available as the next action and is unchanged; the success card is preserved. *(web)*
 
 ---
 
