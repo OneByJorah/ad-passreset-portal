@@ -283,26 +283,16 @@ try
                                     $"Unknown PasswordChangeOptions.ProviderMode: {passwordChangeOptions.ProviderMode}"),
     };
 
+    // Phase 11 + Candidate 3: each branch records only what DIFFERS — its concrete adapter
+    // type and its branch-specific companions (email, AD probe, session/context factory).
+    // The shared wiring (lockout decorator, seam mapping, expiry) is registered ONCE below.
+    Type adapterType;
+
     if (webSettings.UseDebugProvider)
     {
         builder.Services.AddSingleton<DebugPasswordChangeProvider>();
-        builder.Services.AddSingleton<LockoutPasswordChangeProvider>(sp =>
-            new LockoutPasswordChangeProvider(
-                sp.GetRequiredService<DebugPasswordChangeProvider>(),
-                sp.GetRequiredService<IOptions<PasswordChangeOptions>>(),
-                sp.GetRequiredService<ILogger<LockoutPasswordChangeProvider>>()));
+        adapterType = typeof(DebugPasswordChangeProvider);
         builder.Services.AddSingleton<IEmailService, NoOpEmailService>();
-        if (expirySettings.Enabled)
-        {
-            builder.Services.AddSingleton<PasswordExpiryNotificationService>();
-            builder.Services.AddHostedService(sp => sp.GetRequiredService<PasswordExpiryNotificationService>());
-            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(sp =>
-                sp.GetRequiredService<PasswordExpiryNotificationService>());
-        }
-        else
-        {
-            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(new NullExpiryServiceDiagnostics());
-        }
         // Health probe — LDAP TCP probe is cross-platform; returns NotConfigured when LdapHostnames empty.
         builder.Services.AddSingleton<IAdConnectivityProbe, LdapTcpProbe>();
     }
@@ -332,26 +322,10 @@ try
                 logger: loggerFactory.CreateLogger<LdapSession>());
         });
         builder.Services.AddSingleton<LdapPasswordChangeProvider>();
-        builder.Services.AddSingleton<LockoutPasswordChangeProvider>(sp =>
-            new LockoutPasswordChangeProvider(
-                sp.GetRequiredService<LdapPasswordChangeProvider>(),
-                sp.GetRequiredService<IOptions<PasswordChangeOptions>>(),
-                sp.GetRequiredService<ILogger<LockoutPasswordChangeProvider>>()));
+        adapterType = typeof(LdapPasswordChangeProvider);
         builder.Services.AddTransient<IEmailService, SmtpEmailService>();
         // Health probe — cross-platform LDAP TCP probe.
         builder.Services.AddSingleton<IAdConnectivityProbe, LdapTcpProbe>();
-
-        if (expirySettings.Enabled)
-        {
-            builder.Services.AddSingleton<PasswordExpiryNotificationService>();
-            builder.Services.AddHostedService(sp => sp.GetRequiredService<PasswordExpiryNotificationService>());
-            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(sp =>
-                sp.GetRequiredService<PasswordExpiryNotificationService>());
-        }
-        else
-        {
-            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(new NullExpiryServiceDiagnostics());
-        }
     }
 #if WINDOWS_PROVIDER
     else  // effectiveProvider == WiringTarget.Windows
@@ -359,28 +333,10 @@ try
         builder.Services.AddSingleton<PassReset.PasswordProvider.IPrincipalContextFactory,
                                       PassReset.PasswordProvider.DefaultPrincipalContextFactory>();
         builder.Services.AddSingleton<PasswordChangeProvider>();
-        builder.Services.AddSingleton<LockoutPasswordChangeProvider>(sp =>
-            new LockoutPasswordChangeProvider(
-                sp.GetRequiredService<PasswordChangeProvider>(),
-                sp.GetRequiredService<IOptions<PasswordChangeOptions>>(),
-                sp.GetRequiredService<ILogger<LockoutPasswordChangeProvider>>()));
+        adapterType = typeof(PasswordChangeProvider);
         builder.Services.AddTransient<IEmailService, SmtpEmailService>();
         // Health probe — Windows domain-joined PrincipalContext check.
         builder.Services.AddSingleton<IAdConnectivityProbe, PassReset.PasswordProvider.DomainJoinedProbe>();
-
-        if (expirySettings.Enabled)
-        {
-            // Register as singleton so both the hosted service runtime and the health
-            // controller's IExpiryServiceDiagnostics dependency resolve the SAME instance.
-            builder.Services.AddSingleton<PasswordExpiryNotificationService>();
-            builder.Services.AddHostedService(sp => sp.GetRequiredService<PasswordExpiryNotificationService>());
-            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(sp =>
-                sp.GetRequiredService<PasswordExpiryNotificationService>());
-        }
-        else
-        {
-            builder.Services.AddSingleton<IExpiryServiceDiagnostics>(new NullExpiryServiceDiagnostics());
-        }
     }
 #else
     else
@@ -395,6 +351,14 @@ try
     builder.Services.AddSingleton<PassReset.Common.LocalPolicy.BannedWordsChecker>();
     builder.Services.AddSingleton<PassReset.Common.LocalPolicy.LocalPwnedPasswordsChecker>();
 
+    // ─── Shared provider wiring (registered ONCE, independent of the branch above) ──
+    // Lockout decorator wraps whichever concrete adapter the branch selected.
+    builder.Services.AddSingleton<LockoutPasswordChangeProvider>(sp =>
+        new LockoutPasswordChangeProvider(
+            (IPasswordChanger)sp.GetRequiredService(adapterType),
+            sp.GetRequiredService<IOptions<PasswordChangeOptions>>(),
+            sp.GetRequiredService<ILogger<LockoutPasswordChangeProvider>>()));
+
     // Change seam: LocalPolicy( Lockout( adapter ) ) — only the credentialed write path is decorated.
     builder.Services.AddSingleton<IPasswordChanger>(sp =>
     {
@@ -405,26 +369,34 @@ try
         return new PassReset.Common.LocalPolicy.LocalPolicyPasswordChangeProvider(lockout, banned, pwned, log);
     });
 
-    // Status + Directory seams: resolve straight to the single adapter instance, undecorated.
-    // The concrete type is branch-specific; map both seams to whichever adapter was registered above.
-    builder.Services.AddSingleton<IPasswordStatusReader>(ResolveAdapter);
-    builder.Services.AddSingleton<IDirectoryUserReader>(sp => (IDirectoryUserReader)ResolveAdapter(sp));
+    // Status + Directory seams: the selected adapter implements both. One centralized cast each
+    // off `adapterType` — replaces the former cross-seam downcast on the resolver's return value.
+    builder.Services.AddSingleton<IPasswordStatusReader>(sp =>
+        (IPasswordStatusReader)sp.GetRequiredService(adapterType));
+    builder.Services.AddSingleton<IDirectoryUserReader>(sp =>
+        (IDirectoryUserReader)sp.GetRequiredService(adapterType));
 
     builder.Services.AddSingleton<ILockoutDiagnostics>(sp =>
         sp.GetRequiredService<LockoutPasswordChangeProvider>());
 
-    IPasswordStatusReader ResolveAdapter(IServiceProvider sp)
+    // Expiry notification service — identical in every branch; depends only on the toggle.
+    RegisterExpiry(builder.Services, expirySettings.Enabled);
+
+    static void RegisterExpiry(IServiceCollection services, bool enabled)
     {
-        if (webSettings.UseDebugProvider)
-            return sp.GetRequiredService<DebugPasswordChangeProvider>();
-        if (effectiveProvider == WiringTarget.Ldap)
-            return sp.GetRequiredService<LdapPasswordChangeProvider>();
-#if WINDOWS_PROVIDER
-        return sp.GetRequiredService<PasswordChangeProvider>();
-#else
-        throw new InvalidOperationException(
-            "ProviderMode resolved to Windows, but this build excludes the Windows provider.");
-#endif
+        if (enabled)
+        {
+            // Register as singleton so both the hosted service runtime and the health
+            // controller's IExpiryServiceDiagnostics dependency resolve the SAME instance.
+            services.AddSingleton<PasswordExpiryNotificationService>();
+            services.AddHostedService(sp => sp.GetRequiredService<PasswordExpiryNotificationService>());
+            services.AddSingleton<IExpiryServiceDiagnostics>(sp =>
+                sp.GetRequiredService<PasswordExpiryNotificationService>());
+        }
+        else
+        {
+            services.AddSingleton<IExpiryServiceDiagnostics>(new NullExpiryServiceDiagnostics());
+        }
     }
 
     // ─── SIEM service ─────────────────────────────────────────────────────────────
