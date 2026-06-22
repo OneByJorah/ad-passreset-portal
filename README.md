@@ -100,7 +100,8 @@ Download the latest release zip from [GitHub Releases](https://github.com/phibu/
 .\Uninstall-PassReset.ps1
 ```
 
-Full installation guide: [`docs/IIS-Setup.md`](docs/IIS-Setup.md)
+Hosting modes (IIS / Windows Service / Console / Linux): [`docs/Deployment.md`](docs/Deployment.md)
+Full IIS installation guide: [`docs/IIS-Setup.md`](docs/IIS-Setup.md)
 AD service account and permissions: [`docs/AD-ServiceAccount-Setup.md`](docs/AD-ServiceAccount-Setup.md)
 
 ---
@@ -135,6 +136,7 @@ deploy/
   Install-PassReset.ps1       — installs or upgrades on IIS
   Uninstall-PassReset.ps1     — removes the installation from IIS
 docs/
+  Deployment.md                    — hosting-mode hub (IIS / Service / Console / Linux)
   IIS-Setup.md                     — step-by-step IIS and certificate guide (Windows)
   AD-ServiceAccount-Setup.md       — Active Directory permissions guide (Windows)
   AD-ServiceAccount-LDAP-Setup.md  — service account + LDAPS trust for Linux / LDAP mode
