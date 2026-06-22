@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { PasswordForm } from './PasswordForm';
 import { ApiErrorCode } from '../types/settings';
 import type { ClientSettings } from '../types/settings';
-import { mockFetchOnce, mockFetchByUrl } from '../test-utils/fetchMock';
+import { mockFetchByUrl } from '../test-utils/fetchMock';
 
 function baseSettings(overrides: Partial<ClientSettings> = {}): ClientSettings {
   return {
@@ -141,8 +141,7 @@ describe('PasswordForm', () => {
     });
     await user.click(screen.getByRole('button', { name: /change password/i }));
 
-    expect(await screen.findByText(/current password is incorrect/i, undefined, { timeout: 5000 }))
-      .toBeInTheDocument();
+    expect(await screen.findByText(/current password is incorrect/i)).toBeInTheDocument();
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
@@ -168,17 +167,24 @@ describe('PasswordForm', () => {
     });
     await user.click(screen.getByRole('button', { name: /change password/i }));
 
-    expect(await screen.findByText(/directory connection error/i, undefined, { timeout: 5000 }))
-      .toBeInTheDocument();
+    expect(await screen.findByText(/directory connection error/i)).toBeInTheDocument();
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
   it('shows approaching-lockout warning banner when server signals ApproachingLockout', async () => {
-    mockFetchOnce({
-      errors: [
-        { errorCode: ApiErrorCode.ApproachingLockout, fieldName: 'CurrentPassword' },
-      ],
-    });
+    // Route submit explicitly so the debounced HIBP pre-call (useHibpCheck, fired on
+    // new-password entry) can't steal the single mock — same 2026-04-20 CI race the
+    // sibling InvalidCredentials/LdapProblem tests already guard against.
+    mockFetchByUrl(
+      {
+        '/api/password': {
+          body: {
+            errors: [{ errorCode: ApiErrorCode.ApproachingLockout, fieldName: 'CurrentPassword' }],
+          },
+        },
+      },
+      { default: { body: '', init: { status: 200 } } },
+    );
     const user = userEvent.setup();
     renderForm();
 
@@ -190,17 +196,20 @@ describe('PasswordForm', () => {
     });
     await user.click(screen.getByRole('button', { name: /change password/i }));
 
-    // Generous timeout: the error text appears only after the async fetch→setState→re-render
-    // chain. The 1s findBy default flakes under heavy concurrent CI load (the element renders
-    // after the query gives up). 5s never slows an unloaded run — it only extends the max wait.
-    expect(await screen.findAllByText(/one more failed attempt/i, undefined, { timeout: 5000 }))
-      .not.toHaveLength(0);
+    expect(await screen.findAllByText(/one more failed attempt/i)).not.toHaveLength(0);
   });
 
   it('shows PasswordTooRecentlyChanged message on BUG-002 error code', async () => {
-    mockFetchOnce({
-      errors: [{ errorCode: ApiErrorCode.PasswordTooRecentlyChanged }],
-    });
+    // Route submit explicitly (see sibling test) — the debounced HIBP call must not
+    // consume the primary mock.
+    mockFetchByUrl(
+      {
+        '/api/password': {
+          body: { errors: [{ errorCode: ApiErrorCode.PasswordTooRecentlyChanged }] },
+        },
+      },
+      { default: { body: '', init: { status: 200 } } },
+    );
     const user = userEvent.setup();
     renderForm();
 
@@ -212,9 +221,7 @@ describe('PasswordForm', () => {
     });
     await user.click(screen.getByRole('button', { name: /change password/i }));
 
-    // Generous timeout — same async-render-under-CI-load rationale as the ApproachingLockout test.
-    expect(await screen.findByText(/changed too recently/i, undefined, { timeout: 5000 }))
-      .toBeInTheDocument();
+    expect(await screen.findByText(/changed too recently/i)).toBeInTheDocument();
   });
 
   it('fills both new-password fields when generate button clicked', async () => {
