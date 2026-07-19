@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace PasswordResetPortal.Services;
 
@@ -49,7 +50,7 @@ public class RecaptchaService
 
         try
         {
-            var client = _httpClientFactory.CreateClient();
+            using var client = _httpClientFactory.CreateClient();
             var response = await client.PostAsync(
                 "https://www.google.com/recaptcha/api/siteverify",
                 new FormUrlEncodedContent(new Dictionary<string, string>
@@ -74,6 +75,9 @@ public class RecaptchaService
 
 public class RecaptchaResponse
 {
+    [JsonPropertyName("success")]
     public bool Success { get; set; }
+
+    [JsonPropertyName("error-codes")]
     public string[] ErrorCodes { get; set; } = Array.Empty<string>();
 }

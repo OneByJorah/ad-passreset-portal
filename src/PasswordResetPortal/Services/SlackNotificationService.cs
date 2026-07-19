@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace PasswordResetPortal.Services;
 
@@ -12,6 +13,12 @@ public class SlackNotificationService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<SlackNotificationService> _logger;
+
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     public SlackNotificationService(
         IHttpClientFactory httpClientFactory,
@@ -43,10 +50,10 @@ public class SlackNotificationService
             ? $"Password changed successfully for *{username}*"
             : $"Password change failed for *{username}*\nReason: {errorMessage ?? "Unknown error"}";
 
-        var payload = new
+        var payload = new SlackPayload
         {
-            text = message,
-            blocks = new object[]
+            Text = message,
+            Blocks = new object[]
             {
                 new
                 {
@@ -66,8 +73,8 @@ public class SlackNotificationService
 
         try
         {
-            var client = _httpClientFactory.CreateClient();
-            var json = JsonSerializer.Serialize(payload);
+            using var client = _httpClientFactory.CreateClient();
+            var json = JsonSerializer.Serialize(payload, s_jsonOptions);
             var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
             await client.PostAsync(webhookUrl, content);
             _logger.LogInformation("Slack notification sent for user {Username}", username);
@@ -77,4 +84,10 @@ public class SlackNotificationService
             _logger.LogError(ex, "Failed to send Slack notification for user {Username}", username);
         }
     }
+}
+
+public class SlackPayload
+{
+    public string Text { get; set; } = string.Empty;
+    public object[] Blocks { get; set; } = Array.Empty<object>();
 }
