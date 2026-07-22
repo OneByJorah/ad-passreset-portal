@@ -1,75 +1,41 @@
-# Contributing to PassReset
+# Contributing to JorahOne Projects
 
-## Developer Setup — Secrets via `dotnet user-secrets` (STAB-017)
+Thank you for your interest in contributing! This document provides guidelines for contributing to our projects.
 
-In Development, do not put SMTP passwords, LDAP service-account passwords, or reCAPTCHA private keys into `appsettings.Development.json` — that file is committed to git. Use `dotnet user-secrets` instead; values are stored outside the repo tree and bound via ASP.NET Core's default configuration pipeline.
+## How to Contribute
+
+1. **Fork the Repository** — Create a fork of the project on GitHub.
+2. **Create a Branch** — Create a feature branch from `main`.
+3. **Make Changes** — Implement your changes with clear commit messages.
+4. **Test** — Ensure your changes work correctly.
+5. **Submit a PR** — Open a pull request with a clear description.
+
+## Development Setup
 
 ```bash
-cd src/PassReset.Web
-dotnet user-secrets init
-dotnet user-secrets set "SmtpSettings:Password" "dev-pass"
-dotnet user-secrets set "ClientSettings:Recaptcha:PrivateKey" "test-key"
-dotnet user-secrets list
-dotnet user-secrets remove "SmtpSettings:Password"
+git clone https://github.com/your-username/PROJECT.git
+cd PROJECT
+# Follow project-specific setup instructions
 ```
 
-The `__` double-underscore env-var convention also works (`SmtpSettings__Password`, `ClientSettings__Recaptcha__PrivateKey`) — see `docs/Secret-Management.md` for the full matrix and the operator-side `appcmd` snippet.
+## Code Standards
 
-## Commit Convention
+- Follow existing code style and conventions
+- Write clear, descriptive commit messages
+- Add comments for complex logic
+- Update documentation as needed
 
-This project uses [Conventional Commits](https://www.conventionalcommits.org/).
+## Pull Request Guidelines
 
-```
-type(scope): subject
-```
+- Provide a clear PR title and description
+- Reference any related issues
+- Include screenshots for UI changes
+- Ensure all checks pass
 
-**Types**
+## Code of Conduct
 
-| Type | When to use |
-|------|-------------|
-| `feat` | New feature |
-| `fix` | Bug fix |
-| `refactor` | Code change with no behavior change |
-| `docs` | Documentation only |
-| `chore` | Build, tooling, deps |
-| `test` | Tests |
-| `ci` | CI/CD pipeline changes |
-| `perf` | Performance improvement |
-| `style` | Formatting, whitespace |
+Please review our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
 
-**Scopes** (optional): `web`, `provider`, `common`, `deploy`, `docs`, `ci`, `deps`
+## Questions?
 
-Examples:
-```
-feat(provider): add LDAPS support via LdapUseSsl option
-fix(web): gate recaptcha token on Enabled flag
-docs(deploy): update IIS setup for Server 2019/2022/2025
-```
-
-A `commit-msg` hook enforces this format. To activate it:
-
-```sh
-git config core.hooksPath .githooks
-```
-
-## Branch Naming
-
-```
-feature/<short-description>
-fix/<short-description>
-chore/<short-description>
-```
-
-## Release Workflow
-
-1. Merge all changes to `master`.
-2. Tag the commit: `git tag v1.2.3 && git push origin v1.2.3`
-3. The `release.yml` workflow publishes the zip and creates a GitHub Release automatically.
-
-To build locally:
-
-```powershell
-.\deploy\Publish-PassReset.ps1 -Version v1.2.3
-```
-
-The zip lands in `deploy/PassReset-v1.2.3.zip` (excluded from git via `.gitignore`).
+Open an issue or contact **info@jorahone.com**.

@@ -1,255 +1,150 @@
 <div align="center">
-
-  <img src="https://raw.githubusercontent.com/OneByJorah/ad-passreset-portal/main/docs/logo.png" alt="AD Passreset Portal Logo" width="120">
-
-  # 🔐 AD Passreset Portal
-
-  **Self-Service Active Directory Password Change Portal**
-
-  Enable users to securely reset their Active Directory passwords without IT support
-
-  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-  [![C#](https://img.shields.io/badge/C%23-239120?style=flat&logo=csharp&logoColor=white)](https://docs.microsoft.com/en-us/dotnet/csharp/)
-  [![ASP.NET](https://img.shields.io/badge/ASP.NET-512BD4?style=flat&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/apps/aspnet)
-  [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
-  [![LDAP](https://img.shields.io/badge/LAP-LDAP-orange)](https://ldap.com/)
-
-  [Features](#-features) • [Quick Start](#-quick-start) • [Architecture](#-architecture) • [Security](#-security) • [Contributing](#-contributing)
-
+  <img src="https://img.shields.io/badge/ASP.NET-512BD4?style=for-the-badge&logo=dotnet&logoColor=white">
+  <img src="https://img.shields.io/badge/C%23-239120?style=for-the-badge&logo=csharp&logoColor=white">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white">
 </div>
 
----
-
-## 📸 Screenshots
+<br>
 
 <div align="center">
-
-| Login Page | Password Reset | Success Screen |
-|------------|----------------|----------------|
-| ![Login](docs/screenshots/login.png) | ![Reset](docs/screenshots/reset.png) | ![Success](docs/screenshots/success.png) |
-
+  <h1>ad-passreset-portal</h1>
+  <p><strong>Self-Service Active Directory Password Reset Portal</strong></p>
+  <p>Browser-based self-service password reset for Active Directory and Windows.</p>
+  <p>
+    <a href="#features">Features</a> •
+    <a href="#quick-start">Quick Start</a> •
+    <a href="#configuration">Configuration</a> •
+    <a href="#contributing">Contributing</a>
+  </p>
 </div>
 
-> 💡 **Tip:** AD Passreset Portal enforces password complexity policies and provides real-time validation
-
 ---
 
-## ✨ Features
+## Screenshot
 
-| Feature | Description |
-|---------|-------------|
-| 🔒 **Secure Reset** | LDAP-based password change with TLS encryption |
-| 🛡️ **Policy Enforcement** | Validates against AD password policies |
-| 🎨 **Modern UI** | Responsive, accessible web interface |
-| 📱 **Mobile Friendly** | Works on all devices |
-| 🔐 **MFA Support** | Optional multi-factor authentication |
-| 📝 **Audit Logging** | Complete audit trail of all password changes |
-| 🐳 **Docker Ready** | One-command deployment |
-| 🔧 **Configurable** | Customizable password policies |
+![AD PassReset Portal](docs/screenshot.png)
+*Self-service Active Directory password reset portal.*
 
----
+## Features
 
-## 🚀 Quick Start
+- **Self-Service Reset** — Employees change their own password without helpdesk.
+- **Policy Enforcement** — Enforces AD password policies (complexity, history, age).
+- **LDAPS Support** — Secure LDAP connections to Active Directory.
+- **Admin Console** — Manage users, OUs, and portal settings.
+- **Audit Logging** — Track all password reset attempts and outcomes.
+- **Email Notifications** — Alert admins of failed attempts.
+- **Docker Support** — Easy deployment with Docker.
+- **Responsive Design** — Works on desktop and mobile devices.
 
-### Prerequisites
+## Quick Start
 
-- .NET 8.0 SDK or Docker
-- Active Directory domain access
-- Valid AD credentials for service account
-
-### Installation
-
-#### Option 1: Docker (Recommended)
+### Docker (Recommended)
 
 ```bash
-# Clone the repository
 git clone https://github.com/OneByJorah/ad-passreset-portal.git
 cd ad-passreset-portal
 
-# Start with Docker
+cp .env.example .env  # Configure AD settings
 docker compose up -d
 ```
 
-#### Option 2: .NET SDK
+Open **http://localhost:5000** in your browser.
+
+### Manual Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/OneByJorah/ad-passreset-portal.git
-cd ad-passreset-portal
+# Prerequisites: .NET 6+ Runtime
 
-# Restore dependencies
 dotnet restore
-
-# Build and run
-dotnet run --project src/PasswordResetPortal
+dotnet build
+dotnet run
 ```
 
-### Access the Portal
+## Environment Variables
 
-Open **https://password.yourdomain.com** in your browser
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AD_LDAP_SERVER` | — | Active Directory server hostname |
+| `AD_LDAP_PORT` | `636` | LDAP port (636 for LDAPS) |
+| `AD_BASE_DN` | — | Base DN for user searches |
+| `AD_SERVICE_ACCOUNT` | — | Service account username |
+| `AD_SERVICE_PASSWORD` | — | Service account password |
+| `ADMIN_EMAIL` | — | Admin email for notifications |
+| `SMTP_HOST` | — | SMTP server for email alerts |
+| `PORT` | `5000` | Application port |
 
-### Configuration
+## Configuration
 
-Edit `appsettings.json`:
+### Active Directory Settings
 
-```json
-{
-  "LdapSettings": {
-    "Server": "dc.yourdomain.com",
-    "Domain": "yourdomain.com",
-    "BaseDn": "DC=yourdomain,DC=com",
-    "ServiceAccount": "svc-passwordreset",
-    "ServicePassword": "your-secure-password"
-  },
-  "PasswordPolicy": {
-    "MinLength": 8,
-    "RequireUppercase": true,
-    "RequireLowercase": true,
-    "RequireDigit": true,
-    "RequireSpecialChar": true,
-    "HistoryCount": 5
-  }
-}
+1. Create a service account in AD with "Reset Password" permissions
+2. Enable LDAPS on your domain controller
+3. Add the service account credentials to `.env`
+
+### Password Policies
+
+The portal enforces these AD policies:
+- Minimum length (configurable)
+- Complexity requirements (uppercase, lowercase, numbers, symbols)
+- Password history (prevents reuse)
+- Maximum age (if configured in AD)
+
+## Architecture
+
+```
+Browser ──HTTPS──▶ ASP.NET Core ──LDAPS──▶ Active Directory
+                        │
+                        ├──▶ Audit Logger
+                        ├──▶ Email Notifier
+                        └──▶ Admin Console
 ```
 
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  AD Passreset Portal                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   ┌──────────┐      ┌──────────┐      ┌──────────────┐    │
-│   │  Browser │ ───▶ │  IIS/    │ ───▶ │   ASP.NET    │    │
-│   │   SPA    │ ◀─── │  Nginx   │ ◀─── │   Backend    │    │
-│   └──────────┘      └──────────┘      └──────┬───────┘    │
-│                                               │             │
-│                                   ┌───────────┴──────────┐ │
-│                                   │                      │ │
-│                                   ▼                      ▼ │ │
-│                            ┌──────────┐          ┌──────────┐ │
-│                            │  LDAP    │          │  Audit   │ │
-│                            │  Server  │          │  Log DB  │ │
-│                            │  (AD)    │          │          │ │
-│                            └──────────┘          └──────────┘ │
-│                                                               │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| **Backend** | ASP.NET Core 8.0, C# |
-| **Frontend** | Razor Pages, Bootstrap 5 |
-| **Authentication** | Windows Authentication / Forms Auth |
-| **LDAP** | System.DirectoryServices.Protocols |
-| **Database** | SQLite (audit logs) |
-| **Deployment** | Docker / IIS |
-
----
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 ad-passreset-portal/
-├── src/
-│   └── PasswordResetPortal/
-│       ├── Controllers/        # API controllers
-│       ├── Models/             # Data models
-│       ├── Services/           # Business logic
-│       │   ├── LdapService.cs  # LDAP operations
-│       │   └── PolicyService.cs # Password policy
-│       ├── Views/              # Razor views
-│       ├── wwwroot/            # Static files
-│       └── Program.cs          # Entry point
-├── docs/                       # Documentation
-│   └── screenshots/            # Portal screenshots
-├── tests/                      # Unit tests
-├── docker-compose.yml          # Docker deployment
-└── appsettings.json            # Configuration
+├── Controllers/
+│   ├── HomeController.cs       # Main pages
+│   ├── PasswordController.cs   # Password reset logic
+│   └── AdminController.cs      # Admin console
+├── Services/
+│   ├── ActiveDirectoryService.cs  # AD integration
+│   ├── AuditService.cs            # Logging
+│   └── EmailService.cs            # Notifications
+├── Views/                       # Razor views
+├── wwwroot/                     # Static assets
+├── docker-compose.yml           # Docker deployment
+├── appsettings.json             # Configuration
+└── README.md
 ```
 
----
+## Admin Console
 
-## 🔒 Security
+Access the admin console at `/admin`:
 
-### Password Requirements
+| Feature | Description |
+|---------|-------------|
+| User Management | View and manage portal users |
+| Audit Logs | Review all password reset attempts |
+| Policy Settings | Configure password requirements |
+| Email Settings | Configure notification recipients |
 
-| Rule | Description |
-|------|-------------|
-| Minimum Length | 8 characters (configurable) |
-| Uppercase | At least 1 uppercase letter |
-| Lowercase | At least 1 lowercase letter |
-| Digit | At least 1 number |
-| Special | At least 1 special character |
-| History | Cannot reuse last 5 passwords |
+## Contributing
 
-### Security Features
+Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
 
-- ✅ TLS encryption for all communications
-- ✅ LDAP channel binding and signing
-- ✅ Account lockout protection
-- ✅ Rate limiting on reset attempts
-- ✅ Complete audit logging
-- ✅ No credentials stored in plaintext
+## Security
 
----
+For security concerns, see [SECURITY.md](SECURITY.md). Please report vulnerabilities to **info@jorahone.com** — do not use public issues.
 
-## 🛠️ Development
+## License
 
-### Local Development
-
-```bash
-# Clone the repository
-git clone https://github.com/OneByJorah/ad-passreset-portal.git
-cd ad-passreset-portal
-
-# Restore and run
-dotnet restore
-dotnet run --project src/PasswordResetPortal
-```
-
-### Running Tests
-
-```bash
-dotnet test
-```
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🔒 Security
-
-For security concerns, please see [SECURITY.md](SECURITY.md).
-
----
-
-## 💬 Support
-
-- 📧 Email: support@jorah.one
-- 🐛 Issues: [GitHub Issues](https://github.com/OneByJorah/ad-passreset-portal/issues)
-- 📖 Docs: [Documentation](docs/)
+MIT © Jhonattan L. Jimenez
 
 ---
 
 <div align="center">
-
-  **Built with ❤️ by [Jhonattan L. Jimenez](https://github.com/OneByJorah)**
-
-  [⬆ Back to Top](#-ad-passreset-portal)
-
+  <p>Self-service Active Directory password reset.</p>
+  <p><a href="https://github.com/OneByJorah">@OneByJorah</a></p>
 </div>
