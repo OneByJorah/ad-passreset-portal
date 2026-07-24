@@ -1,30 +1,25 @@
 <div align="center">
-  <img src="https://img.shields.io/badge/ASP.NET-512BD4?style=for-the-badge&logo=dotnet&logoColor=white">
-  <img src="https://img.shields.io/badge/C%23-239120?style=for-the-badge&logo=csharp&logoColor=white">
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white">
-</div>
 
-<br>
+![ad-passreset-portal banner](docs/assets/banner.svg)
 
-<div align="center">
-  <h1>ad-passreset-portal</h1>
-  <p><strong>Self-Service Active Directory Password Reset Portal</strong></p>
-  <p>Browser-based self-service password reset for Active Directory and Windows.</p>
-  <p>
-    <a href="#features">Features</a> •
-    <a href="#quick-start">Quick Start</a> •
-    <a href="#configuration">Configuration</a> •
-    <a href="#contributing">Contributing</a>
-  </p>
+# ad-passreset-portal
+
+Self-service Active Directory password reset portal
+
+![License](https://img.shields.io/badge/license-OTHER-brightgreen)
+![Language](https://img.shields.io/badge/language-C#-blue)
+![Fork](https://img.shields.io/badge/status-fork-orange)
 </div>
 
 ---
 
-## Screenshot
+<p align="center">
+  <img src="docs/assets/screenshot.png" alt="ad-passreset-portal preview" width="90%">
+</p>
 
-![AD PassReset Portal](docs/screenshot.png)
-*Self-service Active Directory password reset portal.*
+<br>
+
+---
 
 ## Features
 
@@ -54,7 +49,6 @@ Open **http://localhost:5000** in your browser.
 ### Manual Installation
 
 ```bash
-# Prerequisites: .NET 6+ Runtime
 
 dotnet restore
 dotnet build
@@ -144,7 +138,18 @@ MIT © Jhonattan L. Jimenez
 
 ---
 
-<div align="center">
-  <p>Self-service Active Directory password reset.</p>
-  <p><a href="https://github.com/OneByJorah">@OneByJorah</a></p>
-</div>
+## 🤝 Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## 🔒 Security
+
+Found a vulnerability? Please follow our [Security Policy](SECURITY.md) and report privately to `security@jorahone.com`.
+
+## 📄 License
+
+[Other](LICENSE) © Jhonattan L. Jimenez (OneByJorah)
+
+---
+
+<p align="center">Built with 🌴 by <a href="https://github.com/OneByJorah">OneByJorah</a> · <a href="https://jorahone.com">jorahone.com</a></p>

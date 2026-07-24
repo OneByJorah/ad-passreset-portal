@@ -68,3 +68,6 @@ desktop.ini
 
 # ── Local agent skills / config (not checked in) ─────────────────────────────
 .agents/
+
+# OneByJorah portfolio tooling
+.venv-screenshot/
