@@ -1,0 +1,49 @@
+# ── Docker Compose for ad-passreset-portal ───────────────────────────────────
+# Default run uses the debug password provider so the portal boots without a
+# reachable Active Directory; set ProviderMode=Ldap + real AD values before use.
+services:
+  passreset:
+    build: .
+    image: ghcr.io/onebyjorah/ad-passreset-portal:latest
+    container_name: ad-passreset-portal
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges
+    tmpfs:
+      - /tmp
+    volumes:
+      - keys:/app/keys
+      - brand:/usr/share/PassReset
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      # appsettings.json hardcodes a Kestrel HTTPS endpoint (IIS/Service mode).
+      # In the container we serve plain HTTP on 8080 and terminate TLS upstream.
+      ASPNETCORE_URLS: ""
+      Kestrel__Endpoints__Https__Url: "http://+:8080"
+      WebSettings__EnableHttpsRedirect: "false"
+      WebSettings__UseDebugProvider: ${WEB_DEBUG_PROVIDER:-true}
+      PasswordChangeOptions__UseAutomaticContext: "false"
+      PasswordChangeOptions__ProviderMode: ${AD_PROVIDER_MODE:-Auto}
+      PasswordChangeOptions__LdapHostnames__0: ${AD_LDAP_SERVER:-}
+      PasswordChangeOptions__LdapPort: ${AD_LDAP_PORT:-636}
+      PasswordChangeOptions__LdapUseSsl: ${AD_LDAP_USE_SSL:-true}
+      PasswordChangeOptions__LdapUsername: ${AD_SERVICE_ACCOUNT:-}
+      PasswordChangeOptions__LdapPassword: ${AD_SERVICE_PASSWORD:-}
+      PasswordChangeOptions__ServiceAccountDn: ${AD_SERVICE_ACCOUNT_DN:-CN=svc-passreset,DC=example,DC=local}
+      PasswordChangeOptions__ServiceAccountPassword: ${AD_SERVICE_PASSWORD:-change-me}
+      PasswordChangeOptions__BaseDn: ${AD_BASE_DN:-}
+      SmtpSettings__Host: ${SMTP_HOST:-}
+      SmtpSettings__Port: ${SMTP_PORT:-587}
+      SmtpSettings__FromAddress: ${SMTP_FROM:-passreset@yourdomain.com}
+      HealthCheckSettings__DisableAdConnectivityProbe: ${HEALTH_DISABLE_AD_PROBE:-true}
+      HealthCheckSettings__DisableSmtpConnectivityProbe: ${HEALTH_DISABLE_SMTP_PROBE:-true}
+      HealthCheckSettings__DisableExpiryServiceCheck: "true"
+
+volumes:
+  keys:
+  brand:

@@ -28,6 +28,14 @@
     <ProjectReference Include="..\PassReset.PasswordProvider\PassReset.PasswordProvider.csproj" />
   </ItemGroup>
 
+  <!-- Linux/macOS builds compile the shared, portable pieces of the same project
+       (LockoutPasswordChangeProvider, PasswordPolicyCache, IPwnedPasswordChecker,
+       ILockoutDiagnostics) — required by the controllers. The TFM drops to plain
+       net10.0 off-Windows so it builds; the Windows-only provider stays out. -->
+  <ItemGroup Condition="'$(OS)' != 'Windows_NT'">
+    <ProjectReference Include="..\PassReset.PasswordProvider\PassReset.PasswordProvider.csproj" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="PassReset.Tests" />
     <InternalsVisibleTo Include="PassReset.Tests.Windows" />
