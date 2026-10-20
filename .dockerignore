@@ -1,0 +1,12 @@
+.git
+.github
+docs
+deploy
+tasks
+scripts
+skills-lock.json
+*.md
+.env*
+docker-compose.yml
+Dockerfile
+.dockerignore

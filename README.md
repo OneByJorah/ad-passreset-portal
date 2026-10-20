@@ -44,29 +44,49 @@ cp .env.example .env  # Configure AD settings
 docker compose up -d
 ```
 
-Open **http://localhost:5000** in your browser.
+Open **http://localhost:8080** in your browser.
 
-### Manual Installation
+By default the container boots with the debug password provider so you can try the
+portal without an Active Directory. For a real deployment set in `.env`:
+`ASPNETCORE_ENVIRONMENT=Production`, `WEB_DEBUG_PROVIDER=false`,
+`AD_PROVIDER_MODE=Ldap`, and fill in the `AD_*` and `SMTP_*` values. TLS should be
+terminated by a reverse proxy in front of the container (it serves plain HTTP on 8080).
+
+### Manual Installation (Windows / IIS)
 
 ```bash
-
-dotnet restore
-dotnet build
-dotnet run
+dotnet restore src/PassReset.sln
+dotnet build src/PassReset.sln
+# IIS deployment scripts and Pester test suites live in deploy/
 ```
 
 ## Environment Variables
 
+Docker variables (set in `.env`, see `.env.example`; each maps to the corresponding
+`__`-nested ASP.NET configuration key):
+
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `PORT` | `8080` | Host port bound to 127.0.0.1:8080 |
+| `ASPNETCORE_ENVIRONMENT` | `Development` | Use `Production` for real deployments |
+| `WEB_DEBUG_PROVIDER` | `true` | `false` to use the real AD provider |
+| `AD_PROVIDER_MODE` | `Auto` | `Auto`, `Ldap`, or `Windows` |
 | `AD_LDAP_SERVER` | — | Active Directory server hostname |
 | `AD_LDAP_PORT` | `636` | LDAP port (636 for LDAPS) |
+| `AD_LDAP_USE_SSL` | `true` | Use LDAPS |
 | `AD_BASE_DN` | — | Base DN for user searches |
-| `AD_SERVICE_ACCOUNT` | — | Service account username |
+| `AD_SERVICE_ACCOUNT_DN` | — | Service account DN used by the LDAP provider |
 | `AD_SERVICE_PASSWORD` | — | Service account password |
-| `ADMIN_EMAIL` | — | Admin email for notifications |
-| `SMTP_HOST` | — | SMTP server for email alerts |
-| `PORT` | `5000` | Application port |
+| `SMTP_HOST` | — | SMTP relay host |
+| `SMTP_PORT` | `587` | SMTP relay port |
+| `SMTP_FROM` | — | From address for notifications |
+| `HEALTH_DISABLE_AD_PROBE` | `true` | Skip AD connectivity probe in /api/health |
+| `HEALTH_DISABLE_SMTP_PROBE` | `true` | Skip SMTP probe in /api/health |
+
+Application settings (IIS/manual installs) live in
+`src/PassReset.Web/appsettings.json`, validated against
+`src/PassReset.Web/appsettings.schema.json`; the production template is
+`src/PassReset.Web/appsettings.Production.template.json`.
 
 ## Configuration
 
@@ -98,19 +118,16 @@ Browser ──HTTPS──▶ ASP.NET Core ──LDAPS──▶ Active Directory
 
 ```
 ad-passreset-portal/
-├── Controllers/
-│   ├── HomeController.cs       # Main pages
-│   ├── PasswordController.cs   # Password reset logic
-│   └── AdminController.cs      # Admin console
-├── Services/
-│   ├── ActiveDirectoryService.cs  # AD integration
-│   ├── AuditService.cs            # Logging
-│   └── EmailService.cs            # Notifications
-├── Views/                       # Razor views
-├── wwwroot/                     # Static assets
-├── docker-compose.yml           # Docker deployment
-├── appsettings.json             # Configuration
-└── README.md
+├── src/
+│   ├── PassReset.Web/            # ASP.NET Core host (API + Razor admin + React SPA)
+│   │   ├── Controllers/          # HealthController, PasswordController
+│   │   ├── ClientApp/            # React (Vite) SPA → builds to wwwroot/
+│   │   └── appsettings.json      # Configuration (schema-validated)
+│   ├── PassReset.Common/         # Shared policy/local checkers
+│   ├── PassReset.PasswordProvider/       # Windows AD provider (System.DirectoryServices)
+│   └── PassReset.PasswordProvider.Ldap/  # Cross-platform LDAPS provider
+├── deploy/                       # IIS install/uninstall scripts + Pester tests
+└── docs/                         # Brand assets and guides
 ```
 
 ## Admin Console
