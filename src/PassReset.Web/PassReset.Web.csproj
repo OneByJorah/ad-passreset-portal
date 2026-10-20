@@ -43,6 +43,8 @@
 
   <ItemGroup>
     <PackageReference Include="MailKit" Version="4.17.0" />
+    <!-- Explicit bump: transitive 10.0.0 has GHSA-846f-f764-76mx (high, STAB-020 gate). -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.8" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
